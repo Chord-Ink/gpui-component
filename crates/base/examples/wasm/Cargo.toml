@@ -16,7 +16,8 @@ console_log = "1.0"
 log.workspace = true
 syntect.workspace = true
 tracing-wasm = "0.2"
-wasm-bindgen = "=0.2.121"
+# Pinned exactly to match the in-house `gpui_web`; bump both together.
+wasm-bindgen = "=0.2.127"
 
 [lints]
 workspace = true

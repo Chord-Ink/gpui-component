@@ -101,6 +101,7 @@ impl Inline {
             corner_radii: Corners::default(),
             border_color: gpui::transparent_black(),
             border_style: BorderStyle::default(),
+            corner_shape: Default::default(),
             border_widths: gpui::Edges::all(px(0.)),
         });
     }

@@ -1486,6 +1486,7 @@ impl Element for Scrollbar {
                             },
                             border_color: painted_border,
                             border_style: BorderStyle::default(),
+                            corner_shape: Default::default(),
                         });
 
                         cx.paint_quad(
