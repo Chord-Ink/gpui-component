@@ -95,15 +95,14 @@ impl Inline {
     /// Paint selected bounds for debug.
     #[allow(unused)]
     fn paint_selected_bounds(&self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
-        window.paint_quad(gpui::PaintQuad {
+        window.paint_quad(gpui::quad(
             bounds,
-            background: cx.theme().blue.alpha(0.01).into(),
-            corner_radii: Corners::default(),
-            border_color: gpui::transparent_black(),
-            border_style: BorderStyle::default(),
-            corner_shape: Default::default(),
-            border_widths: gpui::Edges::all(px(0.)),
-        });
+            Corners::default(),
+            cx.theme().blue.alpha(0.01),
+            gpui::Edges::all(px(0.)),
+            gpui::transparent_black(),
+            BorderStyle::default(),
+        ));
     }
 
     fn layout_selections(

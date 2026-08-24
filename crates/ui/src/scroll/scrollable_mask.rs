@@ -4,8 +4,8 @@ use std::rc::Rc;
 use gpui::{
     App, Axis, BorderStyle, Bounds, ContentMask, Edges, Element, ElementId, GlobalElementId,
     Hitbox, Hsla, InteractiveElement as _, IntoElement, IsZero as _, LayoutId, OngoingScroll,
-    PaintQuad, ParentElement as _, Point, Position, ScrollHandle, ScrollWheelEvent,
-    StatefulInteractiveElement as _, Style, StyleRefinement, Styled as _, Window, div, px,
+    ParentElement as _, Point, Position, ScrollHandle, ScrollWheelEvent,
+    StatefulInteractiveElement as _, Style, StyleRefinement, Styled as _, Window, div, px, quad,
     relative,
 };
 use gpui::{Corners, Pixels};
@@ -192,15 +192,14 @@ impl Element for ScrollableMask {
 
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             if let Some(color) = self.debug {
-                window.paint_quad(PaintQuad {
+                window.paint_quad(quad(
                     bounds,
-                    border_widths: Edges::all(px(1.0)),
-                    border_color: color,
-                    background: gpui::transparent_white().into(),
-                    corner_radii: Corners::all(px(0.)),
-                    border_style: BorderStyle::default(),
-                    corner_shape: Default::default(),
-                });
+                    Corners::all(px(0.)),
+                    gpui::transparent_white(),
+                    Edges::all(px(1.0)),
+                    color,
+                    BorderStyle::default(),
+                ));
             }
 
             window.on_mouse_event({

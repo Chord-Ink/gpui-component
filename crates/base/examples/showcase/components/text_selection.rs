@@ -2,8 +2,8 @@ use std::ops::Range;
 
 use gpui::{
     App, BorderStyle, Bounds, Context, Corners, Edges, Element, ElementId, GlobalElementId, Hitbox,
-    InspectorElementId, IntoElement, LayoutId, PaintQuad, ParentElement as _, Pixels, Point,
-    SharedString, Styled as _, StyledText, Window, transparent_black,
+    InspectorElementId, IntoElement, LayoutId, ParentElement as _, Pixels, Point, SharedString,
+    Styled as _, StyledText, Window, quad, transparent_black,
 };
 #[cfg(test)]
 use gpui_base::ElementExt as _;
@@ -76,15 +76,14 @@ impl PlainSelectableText {
         };
         let color = gpui::hsla(0.58, 0.85, 0.62, 0.35);
         for bounds in selection_quad_bounds(start, end, layout.bounds(), layout.line_height()) {
-            window.paint_quad(PaintQuad {
+            window.paint_quad(quad(
                 bounds,
-                background: color.into(),
-                corner_radii: Corners::default(),
-                border_widths: Edges::default(),
-                border_color: transparent_black(),
-                border_style: BorderStyle::default(),
-                corner_shape: Default::default(),
-            });
+                Corners::default(),
+                color,
+                Edges::default(),
+                transparent_black(),
+                BorderStyle::default(),
+            ));
         }
     }
 }

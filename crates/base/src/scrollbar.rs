@@ -10,9 +10,9 @@ use crate::{
 use gpui::{
     Anchor, App, Axis, Background, BorderStyle, Bounds, ContentMask, CursorStyle, Edges, Element,
     ElementId, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement,
-    IsZero, LayoutId, ListState, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels,
-    Point, Position, ScrollHandle, ScrollWheelEvent, Size, Style, UniformListScrollHandle, Window,
-    fill, point, prelude::FluentBuilder, px, relative, size,
+    IsZero, LayoutId, ListState, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    Position, ScrollHandle, ScrollWheelEvent, Size, Style, UniformListScrollHandle, Window, fill,
+    point, prelude::FluentBuilder, px, quad, relative, size,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -1465,11 +1465,11 @@ impl Element for Scrollbar {
                     window.paint_layer(hitbox_bounds, |cx| {
                         cx.paint_quad(fill(painted_bounds, painted_track_bg));
 
-                        cx.paint_quad(PaintQuad {
-                            bounds: painted_bounds,
-                            corner_radii: (0.).into(),
-                            background: gpui::transparent_black().into(),
-                            border_widths: if is_vertical {
+                        cx.paint_quad(quad(
+                            painted_bounds,
+                            0.,
+                            gpui::transparent_black(),
+                            if is_vertical {
                                 Edges {
                                     top: px(0.),
                                     right: px(0.),
@@ -1484,10 +1484,9 @@ impl Element for Scrollbar {
                                     left: px(0.),
                                 }
                             },
-                            border_color: painted_border,
-                            border_style: BorderStyle::default(),
-                            corner_shape: Default::default(),
-                        });
+                            painted_border,
+                            BorderStyle::default(),
+                        ));
 
                         cx.paint_quad(
                             fill(painted_thumb_bounds, painted_thumb_bg).corner_radii(radius),
