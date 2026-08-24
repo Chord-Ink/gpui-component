@@ -83,6 +83,7 @@ impl PlainSelectableText {
                 border_widths: Edges::default(),
                 border_color: transparent_black(),
                 border_style: BorderStyle::default(),
+                corner_shape: Default::default(),
             });
         }
     }
