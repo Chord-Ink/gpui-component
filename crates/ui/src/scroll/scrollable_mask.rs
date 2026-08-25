@@ -190,7 +190,7 @@ impl Element for ScrollableMask {
             })
             .unwrap_or_default();
 
-        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        window.with_content_mask(Some(ContentMask::new(bounds)), |window| {
             if let Some(color) = self.debug {
                 window.paint_quad(quad(
                     bounds,
