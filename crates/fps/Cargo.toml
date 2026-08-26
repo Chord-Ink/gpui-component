@@ -15,7 +15,7 @@ version = "0.1.0"
 doctest = false
 
 [dependencies]
-gpui.workspace = true
+gpui = { workspace = true, features = ["profiler"] }
 instant.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
