@@ -29,6 +29,7 @@ pub struct Switch {
     children: SmallVec<[AnyElement; 2]>,
     on_change: Option<ChangeHandler>,
     accessibility_label: Option<SharedString>,
+    provided_focus_handle: Option<FocusHandle>,
     tab_index: isize,
     tab_stop: bool,
 }
@@ -252,6 +253,7 @@ impl Switch {
             children: SmallVec::new(),
             on_change: None,
             accessibility_label: None,
+            provided_focus_handle: None,
             tab_index: 0,
             tab_stop: true,
         }
@@ -314,11 +316,22 @@ impl Switch {
         self
     }
 
+    /// Uses a caller-owned focus handle instead of creating keyed state.
+    ///
+    /// A switch that draws its focus ring on a child, such as a track nested
+    /// beside a label, needs the same handle the root tracks.
+    pub fn track_focus(mut self, focus_handle: &FocusHandle) -> Self {
+        self.provided_focus_handle = Some(focus_handle.clone());
+        self
+    }
+
     fn focus_handle(&self, window: &mut Window, cx: &mut App) -> FocusHandle {
-        window
-            .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
-            .read(cx)
-            .clone()
+        self.provided_focus_handle.clone().unwrap_or_else(|| {
+            window
+                .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+                .read(cx)
+                .clone()
+        })
     }
 }
 
