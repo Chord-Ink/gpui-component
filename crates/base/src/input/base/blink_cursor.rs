@@ -4,11 +4,9 @@ use instant::Duration;
 static INTERVAL: Duration = Duration::from_millis(500);
 static PAUSE_DELAY: Duration = Duration::from_millis(300);
 
-// On Windows, Linux, we should use integer to avoid blurry cursor.
-#[cfg(not(target_os = "macos"))]
-pub(super) const CURSOR_WIDTH: Pixels = px(2.);
-#[cfg(target_os = "macos")]
-pub(super) const CURSOR_WIDTH: Pixels = px(1.5);
+// One pixel, the width a browser draws. It is also an integer, which is what
+// keeps the caret from blurring on Windows and Linux.
+pub(super) const CURSOR_WIDTH: Pixels = px(1.);
 
 /// To manage the Input cursor blinking.
 ///

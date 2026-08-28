@@ -379,6 +379,29 @@ fn empty_bottom_height(
     }
 }
 
+/// Ascent plus descent of the shaped text on the caret's own line — the height
+/// a browser gives its caret. A fraction of the line height drifts from the
+/// text whenever the line box is looser or tighter than the face.
+///
+/// A line shaped from no runs — an empty field, a blank line — reports zero
+/// metrics, so measure the first line that carries any, and fall back to a
+/// fraction of the line height only when no visible line does.
+fn caret_height(lines: &[LineLayout], caret_line: Option<usize>, line_height: Pixels) -> Pixels {
+    let measured = |ix: usize| -> Option<Pixels> {
+        lines
+            .get(ix)?
+            .wrapped_lines
+            .first()
+            .map(|shaped| shaped.ascent + shaped.descent)
+            .filter(|height| *height > px(0.))
+    };
+
+    caret_line
+        .and_then(measured)
+        .or_else(|| (0..lines.len()).find_map(measured))
+        .unwrap_or(0.85 * line_height)
+}
+
 /// Layout information for fold icons.
 struct FoldIconLayout {
     /// Hitbox for the line number area (used for hover detection)
@@ -575,8 +598,15 @@ impl<M: InputModeKind> TextElement<M> {
                 }
             }
 
-            // cursor bounds
-            let cursor_height = 0.85 * line_height;
+            // The caret spans the ascent and descent of the font on its own
+            // line, which is how a browser sizes it. A fraction of the line
+            // height drifts from the text whenever the line box is looser or
+            // tighter than the face.
+            let cursor_height = caret_height(
+                lines,
+                visible_buffer_lines.iter().position(|&bl| bl == cursor_row),
+                line_height,
+            );
 
             // Match the caret to the deferred scroll target (applied below) that
             // the text paints at; otherwise the caret follows the cursor-scroll
