@@ -109,6 +109,7 @@ impl RenderOnce for OtpInput {
 
             let is_input_focused = ix == cursor_ix && is_focused;
             let focus_visible = is_input_focused && !self.disabled && self.focus_ring_enabled;
+            let caret_visible = is_input_focused && !self.disabled && blink_show;
 
             groups[group_ix].push(
                 h_flex()
@@ -150,7 +151,7 @@ impl RenderOnce for OtpInput {
                                 this.child(c.to_string())
                             }
                         }
-                        None => this.when(is_input_focused && blink_show, |this| {
+                        None => this.when(caret_visible, |this| {
                             this.child(
                                 div()
                                     .h_4()
