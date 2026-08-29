@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+* Avoid writing comments. If you must write comments, keep only necessary information and make it very short and precise.
+* Keep git commit messages to one line. If you must add a body, keep the body under 60 characters.
+* For comments and git commit messages, do not say what was not done or why. Only describe the current state briefly.
+* Do not use advanced words or jargon, except for terms related to GPUI, Rust, and boardui. Keep all text simple and direct.
+
 ## Canonical Design and Coding Guides
 
 Before changing UI, interaction, interface language, layout, styling,
