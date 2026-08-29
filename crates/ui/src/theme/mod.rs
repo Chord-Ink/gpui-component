@@ -2,10 +2,12 @@ use crate::{
     highlighter::HighlightTheme, list::ListSettings, notification::NotificationSettings,
     scroll::ScrollbarMode, sheet::SheetSettings,
 };
-use gpui::{App, Global, Hsla, IsZero as _, Pixels, SharedString, Window, WindowAppearance, px};
+use gpui::{
+    App, Global, Half as _, Hsla, IsZero as _, Pixels, SharedString, Window, WindowAppearance, px,
+};
 pub use gpui_base::{
-    ColorTokens, RadiusTokens, SemanticThemeTokens, ShadowTokens, SpacingTokens, TextStyleToken,
-    TypographyTokens,
+    CaretMotion, CaretStyle, ColorTokens, RadiusTokens, SemanticThemeTokens, ShadowTokens,
+    SpacingTokens, TextStyleToken, TypographyTokens,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -32,6 +34,19 @@ pub fn init(cx: &mut App) {
     // Ensure theme is loaded directly on startup for WASM compatibility
     Theme::change(ThemeMode::Light, None, cx);
     Theme::sync_scrollbar_appearance(cx);
+
+    // A caret and a selection left to the platform both follow the system
+    // insertion color, so repaint when the user picks another one. Never fires
+    // where the platform reports no system colors.
+    cx.on_system_colors_change(|cx| {
+        let insertion_color = cx.text_insertion_color();
+        let accent = cx.accent_color();
+        let theme = Theme::global_mut(cx);
+        theme.system_insertion_color = insertion_color;
+        theme.system_accent = accent;
+        cx.refresh_windows();
+    })
+    .detach();
 }
 
 pub trait ActiveTheme {
@@ -62,6 +77,31 @@ const SCROLLBAR_ENTER: Duration = Duration::from_millis(300);
 const SCROLLBAR_EXIT: Duration = Duration::from_millis(500);
 /// How long the thumb takes to reach its hovered or resting width.
 const SCROLLBAR_EXPAND: Duration = Duration::from_millis(300);
+
+/// The alpha a selection is painted at when the platform supplies its hue.
+///
+/// Inside the band every translucent implementation uses — GTK4 and
+/// WebKit-Adwaita 0.30, Gecko 0.31 in dark, Zed 0.24, Flutter 0.20 to 0.40 —
+/// and the same ceiling a theme's own selection color is clamped to.
+const SELECTION_ALPHA: f32 = 0.3;
+
+/// How long the caret rests in each of its two phases. Half a second is where
+/// Blink, Gecko and every editor that had to pick a number landed.
+const CARET_BLINK_INTERVAL: Duration = Duration::from_millis(500);
+/// How long the caret is held visible after a keystroke before it resumes, one
+/// full phase, so a burst of typing never starts a blink mid-word.
+const CARET_BLINK_PAUSE: Duration = Duration::from_millis(500);
+
+/// The caret motion this design system projects onto Base.
+///
+/// Every desktop platform blinks its caret unless the user has asked it not
+/// to, so this one does too; a product turns it off through
+/// [`Theme::caret_motion`].
+fn caret_motion() -> CaretMotion {
+    CaretMotion::new()
+        .with_interval(CARET_BLINK_INTERVAL)
+        .with_pause(CARET_BLINK_PAUSE)
+}
 
 /// The scrollbar motion this design system projects onto Base.
 ///
@@ -139,6 +179,61 @@ pub struct Theme {
     pub list: ListSettings,
     /// The sheet settings.
     pub sheet: SheetSettings,
+    /// Whether the caret takes the platform's own insertion-point color where
+    /// the platform has one.
+    ///
+    /// macOS 14 and later paints its insertion point in a color of its own; no
+    /// other desktop does, and neither does the web, so this changes nothing
+    /// off macOS.
+    ///
+    /// It is derived from the active theme, not an application setting:
+    /// [`Theme::apply_config`] turns it off for a theme that names its own
+    /// `caret` color, because the named color is the more specific
+    /// instruction, and back on for one that does not. To pin a caret color,
+    /// name `caret` in the theme rather than writing here — the next theme
+    /// change would overwrite it.
+    #[serde(default = "default_true")]
+    pub system_caret: bool,
+    /// Whether the selection takes the platform's own text-highlight color
+    /// where the platform has one.
+    ///
+    /// Derived from the active theme the same way [`Theme::system_caret`] is:
+    /// [`Theme::apply_config`] turns it off for a theme that names
+    /// `selection.background`, and back on for one that does not. To pin a
+    /// selection color, name it in the theme rather than writing here.
+    #[serde(default = "default_true")]
+    pub system_selection: bool,
+    /// The color selected text is recolored to, or `None` — the default — to
+    /// leave every glyph its own color.
+    ///
+    /// Windows, GTK3 and Qt all flip selected text to white, but each pairs
+    /// that with an opaque selection, where the flip is what keeps the text
+    /// readable. This library paints a translucent one, under which a flip
+    /// would only flatten the coloring the text already carried, so it is off
+    /// until a theme names `selection.foreground`.
+    #[serde(default)]
+    pub selection_foreground: Option<Hsla>,
+    /// The color the system draws its own text insertion caret in, as of the
+    /// last time the platform reported one.
+    ///
+    /// Read it through [`Theme::caret_color`]. The platform call behind it is
+    /// not cheap enough to make once per element per frame, so it is cached
+    /// here and refreshed on [`Theme::change`] — which is where a light/dark
+    /// switch lands, and a system color resolves to a different shade in each —
+    /// and whenever the user picks another one.
+    #[serde(skip)]
+    pub system_insertion_color: Option<Hsla>,
+    /// The desktop's accent color, as of the last time the platform reported
+    /// one.
+    ///
+    /// Cached and refreshed the same way [`Self::system_insertion_color`] is.
+    /// It supplies the selection hue on the platforms that have no separate
+    /// text-highlight color of their own — which is every one but macOS.
+    #[serde(skip)]
+    pub system_accent: Option<Hsla>,
+    /// How the caret blinks, for every input and OTP field.
+    #[serde(skip)]
+    pub caret_motion: CaretMotion,
 }
 
 impl Default for Theme {
@@ -220,12 +315,14 @@ impl Theme {
     /// Changes the scrollbar display mode and synchronizes the Base projection.
     pub fn set_scrollbar_mode(mode: ScrollbarMode, cx: &mut App) {
         Theme::global_mut(cx).scrollbar_mode = mode;
-        let base_theme = gpui_base::Theme::global_mut(cx);
-        base_theme.scrollbar = base_theme
-            .scrollbar
-            .clone()
-            .with_mode(mode)
-            .with_motion(scrollbar_motion(mode));
+        gpui_base::Theme::update(cx, |theme| {
+            let scrollbar = theme
+                .scrollbar()
+                .clone()
+                .with_mode(mode)
+                .with_motion(scrollbar_motion(mode));
+            theme.with_scrollbar(scrollbar)
+        });
     }
 
     /// Change the theme mode.
@@ -238,8 +335,12 @@ impl Theme {
             cx.set_global(theme);
         }
 
+        let insertion_color = cx.text_insertion_color();
+        let accent = cx.accent_color();
         let theme = cx.global_mut::<Theme>();
         theme.mode = mode;
+        theme.system_insertion_color = insertion_color;
+        theme.system_accent = accent;
         if mode.is_dark() {
             theme.apply_config(&theme.dark_theme.clone());
         } else {
@@ -254,43 +355,51 @@ impl Theme {
         }
     }
 
-    /// This theme projected onto the Base layer, which owns the scrollbar and
-    /// resize handles and reads the semantic tokens.
+    /// This theme projected onto the Base layer, which owns the scrollbar,
+    /// the resize handles and the caret's blink timer, and reads the semantic
+    /// tokens.
     fn base_theme(&self) -> gpui_base::Theme {
-        gpui_base::Theme {
-            tokens: self.semantic_tokens(),
-            scrollbar: gpui_base::ScrollbarTheme::new()
-                .with_mode(self.scrollbar_mode)
-                .with_motion(scrollbar_motion(self.scrollbar_mode))
-                .with_styles(
-                    gpui_base::ScrollbarStyles::default()
-                        .track(|style| style.bg(self.scrollbar))
-                        .track_hover(|style| style.bg(self.scrollbar))
-                        .track_active(|style| style.bg(self.scrollbar).border_color(self.border))
-                        .thumb(|style| style.bg(self.tokens.scrollbar_thumb).radius(self.radius))
-                        .thumb_hover(|style| {
-                            style
-                                .bg(self.tokens.scrollbar_thumb_hover)
-                                .radius(self.radius)
-                        })
-                        .thumb_active(|style| {
-                            style
-                                .bg(self.tokens.scrollbar_thumb_hover)
-                                .radius(self.radius)
-                        }),
-                ),
-            resizable: gpui_base::ResizableTheme {
-                handle: self.border,
-                active_handle: self.drag_border,
-            },
-        }
+        gpui_base::Theme::new()
+            .with_tokens(self.semantic_tokens())
+            .with_scrollbar(
+                gpui_base::ScrollbarTheme::new()
+                    .with_mode(self.scrollbar_mode)
+                    .with_motion(scrollbar_motion(self.scrollbar_mode))
+                    .with_styles(
+                        gpui_base::ScrollbarStyles::default()
+                            .track(|style| style.bg(self.scrollbar))
+                            .track_hover(|style| style.bg(self.scrollbar))
+                            .track_active(|style| {
+                                style.bg(self.scrollbar).border_color(self.border)
+                            })
+                            .thumb(|style| {
+                                style.bg(self.tokens.scrollbar_thumb).radius(self.radius)
+                            })
+                            .thumb_hover(|style| {
+                                style
+                                    .bg(self.tokens.scrollbar_thumb_hover)
+                                    .radius(self.radius)
+                            })
+                            .thumb_active(|style| {
+                                style
+                                    .bg(self.tokens.scrollbar_thumb_hover)
+                                    .radius(self.radius)
+                            }),
+                    ),
+            )
+            .with_resizable(
+                gpui_base::ResizableTheme::new()
+                    .with_handle(self.border)
+                    .with_active_handle(self.drag_border),
+            )
+            .with_caret_motion(self.caret_motion)
     }
 
     /// Push the current theme down to the Base layer.
     ///
-    /// The Base layer holds its own copy of the theme — the semantic tokens
-    /// plus the scrollbar and resize-handle styles — because it paints those
-    /// without going through `gpui-component`. [`Theme::change`] refreshes that
+    /// The Base layer holds its own copy of the theme — the semantic tokens,
+    /// the scrollbar and resize-handle styles, and the caret's blink timing —
+    /// because it paints those without going through `gpui-component`. [`Theme::change`] refreshes that
     /// copy, but writing to the theme's public fields directly does not, so a
     /// scrollbar keeps painting with the radius and colors it was last given.
     ///
@@ -379,6 +488,78 @@ impl Theme {
             px(0.)
         } else {
             RADIUS_FULL
+        }
+    }
+
+    /// How the text insertion caret is drawn, following the conventions of the
+    /// platform the app is built for.
+    ///
+    /// macOS has drawn a two-point capsule caret since Sonoma, in the color of
+    /// the system insertion point. Windows, GNOME, KDE and every browser
+    /// engine draw a square one-pixel bar in the text color, so that is what
+    /// the other targets get. A theme whose [`Theme::radius`] is zero squares
+    /// the caret too, the same way [`Theme::radius_full`] squares a pill.
+    pub fn caret_style(&self) -> CaretStyle {
+        let width = if cfg!(target_os = "macos") {
+            px(2.)
+        } else {
+            px(1.)
+        };
+        let radius = if cfg!(target_os = "macos") && !self.radius.is_zero() {
+            width.half()
+        } else {
+            px(0.)
+        };
+
+        CaretStyle::new()
+            .with_width(width)
+            .with_radius(radius)
+            .with_color(self.caret_color())
+    }
+
+    /// The background painted behind selected text.
+    ///
+    /// A theme that names `selection.background` owns it outright. When none
+    /// is named, the platform answers, each with the color it selects text
+    /// with: macOS its text-highlight color, Windows and Linux their accent —
+    /// which is what WinUI and GNOME both select with — and the web, which
+    /// publishes neither, with [`ThemeColor::selection`].
+    ///
+    /// The alpha is this library's, not the platform's. AppKit hands out a
+    /// pale tint meant to be filled opaque behind the glyphs; a wash laid over
+    /// syntax-highlighted text needs the saturated form instead — which is the
+    /// same color the caret takes, so the two cannot disagree about the hue.
+    ///
+    /// The text under it keeps its own color. Every platform that recolors
+    /// selected text pairs that with an opaque fill, where the flip is what
+    /// keeps the text readable; under a wash it would only flatten the syntax
+    /// colors it covers.
+    pub fn selection_color(&self) -> Hsla {
+        if self.system_selection {
+            self.system_insertion_color
+                .or(self.system_accent)
+                .map(|color| color.opacity(SELECTION_ALPHA))
+                .unwrap_or(self.selection)
+        } else {
+            self.selection
+        }
+    }
+
+    /// The color the caret is painted in.
+    ///
+    /// A theme that names a `caret` color owns it outright. When none is
+    /// named, the platform answers: macOS 14 and later with the color AppKit
+    /// gives its own insertion point, and everything else with the text
+    /// foreground, which is where [`ThemeColor::caret`] falls back.
+    ///
+    /// That color follows System Settings > Appearance > Highlight color, not
+    /// the accent color — macOS ships highlight set to follow the accent, so
+    /// the two agree until the user sets highlight on its own.
+    pub fn caret_color(&self) -> Hsla {
+        if self.system_caret {
+            self.system_insertion_color.unwrap_or(self.caret)
+        } else {
+            self.caret
         }
     }
 
@@ -531,12 +712,12 @@ mod semantic_token_tests {
     #[test]
     fn base_projection_carries_a_square_radius_to_the_scrollbar() {
         let mut theme = Theme::default();
-        assert!(!theme.base_theme().tokens.radius.md.is_zero());
+        assert!(!theme.base_theme().tokens().radius.md.is_zero());
 
         // The scrollbar paints from the Base layer's copy of the theme, so a
         // square theme has to reach it or the thumb stays a pill.
         theme.radius = px(0.);
-        assert!(theme.base_theme().tokens.radius.md.is_zero());
+        assert!(theme.base_theme().tokens().radius.md.is_zero());
     }
 
     #[test]
@@ -577,6 +758,12 @@ impl From<&ThemeColor> for Theme {
             tile_shadow: true,
             tile_radius: px(0.),
             list: ListSettings::default(),
+            system_caret: true,
+            system_selection: true,
+            selection_foreground: None,
+            system_insertion_color: None,
+            system_accent: None,
+            caret_motion: caret_motion(),
             colors: *colors,
             tokens: ThemeTokens::from(colors),
             light_theme: Rc::new(ThemeConfig::default()),
@@ -649,7 +836,7 @@ mod base_theme_projection_tests {
             Theme::set_scrollbar_mode(ScrollbarMode::Always, cx);
             assert_eq!(Theme::global(cx).scrollbar_mode, ScrollbarMode::Always);
             assert_eq!(
-                gpui_base::Theme::global(cx).scrollbar.mode(),
+                gpui_base::Theme::global(cx).scrollbar().mode(),
                 gpui_base::ScrollbarMode::Always
             );
             assert_styled_projection(cx);
@@ -668,7 +855,7 @@ mod base_theme_projection_tests {
             assert_eq!(bare.expand(), Duration::ZERO);
 
             Theme::set_scrollbar_mode(ScrollbarMode::Scrolling, cx);
-            let motion = gpui_base::Theme::global(cx).scrollbar.motion();
+            let motion = gpui_base::Theme::global(cx).scrollbar().motion();
             assert_eq!(motion.idle(), SCROLLBAR_IDLE);
             assert_eq!(motion.enter(), SCROLLBAR_ENTER);
             assert_eq!(motion.exit(), SCROLLBAR_EXIT);
@@ -680,7 +867,7 @@ mod base_theme_projection_tests {
             );
 
             Theme::set_scrollbar_mode(ScrollbarMode::Hover, cx);
-            let motion = gpui_base::Theme::global(cx).scrollbar.motion();
+            let motion = gpui_base::Theme::global(cx).scrollbar().motion();
             assert_eq!(motion.entrance(), gpui_base::ScrollbarEntrance::Fade);
             assert_eq!(
                 motion.thumb_hover_entrance(),
@@ -693,13 +880,139 @@ mod base_theme_projection_tests {
         let theme = Theme::global(cx);
         let base = gpui_base::Theme::global(cx);
 
-        assert_eq!(base.tokens, theme.semantic_tokens());
-        assert_eq!(base.scrollbar.mode(), theme.scrollbar_mode);
+        assert_eq!(*base.tokens(), theme.semantic_tokens());
+        assert_eq!(base.scrollbar().mode(), theme.scrollbar_mode);
         assert_eq!(
-            base.scrollbar.motion(),
+            base.scrollbar().motion(),
             scrollbar_motion(theme.scrollbar_mode)
         );
-        assert_eq!(base.resizable.handle, theme.border);
-        assert_eq!(base.resizable.active_handle, theme.drag_border);
+        assert_eq!(base.resizable().handle(), theme.border);
+        assert_eq!(base.resizable().active_handle(), theme.drag_border);
+    }
+}
+
+#[cfg(test)]
+mod caret_and_selection_tests {
+    use super::*;
+
+    #[test]
+    fn an_unnamed_caret_falls_back_to_the_text_foreground() {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let colors = if mode.is_dark() {
+                ThemeColor::dark()
+            } else {
+                ThemeColor::light()
+            };
+            assert_eq!(
+                colors.caret, colors.foreground,
+                "the built-in {mode:?} theme names no caret, so it takes the text color"
+            );
+        }
+    }
+
+    #[test]
+    fn a_named_caret_color_outranks_the_system_one() {
+        let system = gpui::red();
+        let named = gpui::blue();
+        let mut theme = Theme::default();
+        theme.caret = named;
+        theme.system_insertion_color = Some(system);
+
+        theme.system_caret = true;
+        assert_eq!(theme.caret_color(), system);
+
+        // Which is what applying a theme that names `caret` does.
+        theme.system_caret = false;
+        assert_eq!(theme.caret_color(), named);
+    }
+
+    #[test]
+    fn a_named_selection_color_outranks_the_system_one() {
+        let system = gpui::red();
+        let named = gpui::blue();
+        let mut theme = Theme::default();
+        theme.selection = named;
+        theme.system_insertion_color = Some(system);
+
+        theme.system_selection = true;
+        assert_eq!(
+            theme.selection_color(),
+            system.opacity(SELECTION_ALPHA),
+            "an unnamed selection takes the platform hue at this library's own alpha"
+        );
+
+        // Which is what applying a theme that names `selection.background` does.
+        theme.system_selection = false;
+        assert_eq!(theme.selection_color(), named);
+    }
+
+    #[test]
+    fn the_accent_supplies_the_selection_where_the_platform_has_no_highlight() {
+        let accent = gpui::red();
+        let mut theme = Theme::default();
+        theme.system_selection = true;
+        theme.system_caret = true;
+        theme.system_accent = Some(accent);
+
+        // Windows and Linux: an accent, but no text-insertion color of their own.
+        theme.system_insertion_color = None;
+
+        assert_eq!(theme.selection_color(), accent.opacity(SELECTION_ALPHA));
+        assert_eq!(
+            theme.caret_color(),
+            theme.caret,
+            "neither draws its caret in the accent, so the caret stays the theme's"
+        );
+    }
+
+    #[test]
+    fn a_text_highlight_color_outranks_the_accent_for_the_selection() {
+        let mut theme = Theme::default();
+        theme.system_selection = true;
+        theme.system_insertion_color = Some(gpui::blue());
+        theme.system_accent = Some(gpui::red());
+
+        assert_eq!(
+            theme.selection_color(),
+            gpui::blue().opacity(SELECTION_ALPHA),
+            "macOS publishes both, and selects text with the highlight color"
+        );
+    }
+
+    #[test]
+    fn the_caret_and_the_selection_share_one_hue() {
+        let mut theme = Theme::default();
+        theme.system_insertion_color = Some(gpui::red());
+        theme.system_caret = true;
+        theme.system_selection = true;
+
+        let caret = theme.caret_color();
+        let selection = theme.selection_color();
+
+        assert_eq!(
+            (caret.h, caret.s),
+            (selection.h, selection.s),
+            "on a platform that supplies both, they are one setting at two alphas"
+        );
+    }
+
+    #[test]
+    fn a_platform_reporting_no_insertion_color_keeps_the_theme_color() {
+        let mut theme = Theme::default();
+        theme.caret = gpui::blue();
+        theme.system_caret = true;
+        theme.system_selection = true;
+        theme.system_insertion_color = None;
+
+        assert_eq!(theme.caret_color(), gpui::blue());
+        assert_eq!(theme.selection_color(), theme.selection);
+    }
+
+    #[test]
+    fn squaring_the_theme_squares_the_caret() {
+        let mut theme = Theme::default();
+        theme.radius = px(0.);
+
+        assert_eq!(theme.caret_style().radius(), px(0.));
     }
 }

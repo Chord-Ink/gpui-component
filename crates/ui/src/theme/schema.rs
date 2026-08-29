@@ -502,6 +502,10 @@ pub struct ThemeConfigColors {
     /// Input selection background color.
     #[serde(rename = "selection.background")]
     pub selection: Option<SharedString>,
+    /// The color selected text is recolored to. Unset leaves every glyph its
+    /// own color, which is what a translucent selection wants.
+    #[serde(rename = "selection.foreground")]
+    pub selection_foreground: Option<SharedString>,
     /// Sidebar background color.
     #[serde(rename = "sidebar.background")]
     pub sidebar: Option<SharedString>,
@@ -913,7 +917,7 @@ impl ThemeColor {
                 )
         );
         apply_color!(group_box_foreground, fallback = self.foreground);
-        apply_color!(caret, fallback = self.primary);
+        apply_color!(caret, fallback = self.foreground);
         apply_color!(chart_1, fallback = self.blue.lighten(0.4));
         apply_color!(chart_2, fallback = self.blue.lighten(0.2));
         apply_color!(chart_3, fallback = self.blue);
@@ -973,7 +977,17 @@ impl ThemeColor {
         apply_background_color!(scrollbar, fallback = tokens.background);
         apply_background_color!(scrollbar_thumb, fallback = tokens.accent);
         apply_background_color!(scrollbar_thumb_hover, fallback = tokens.scrollbar_thumb);
-        apply_background_color!(selection, fallback = tokens.primary);
+        // A theme that names a primary gets its own hue here; one that names
+        // neither falls to the base blue rather than to a primary that a
+        // neutral palette leaves near-black.
+        apply_background_color!(
+            selection,
+            fallback = if colors.primary.is_some() {
+                tokens.primary
+            } else {
+                tokens.blue
+            }
+        );
         apply_background_color!(
             sidebar,
             fallback = self.background.blend(self.border.opacity(0.15))
@@ -1077,6 +1091,22 @@ impl Theme {
         } else {
             ThemeColor::light()
         };
+
+        // A theme that names its caret color owns it; only a theme that names
+        // none leaves the caret to the platform's own insertion-point color.
+        self.system_caret = config.colors.caret.is_none();
+
+        // And likewise for the selection, which on macOS is the same setting
+        // at a different tint.
+        self.system_selection = config.colors.selection.is_none();
+
+        // Unset unless the theme names one, so selected text keeps whatever
+        // color it already carried.
+        self.selection_foreground = config
+            .colors
+            .selection_foreground
+            .as_deref()
+            .and_then(|value| try_parse_color(value).ok());
 
         if let Some(font_size) = config.font_size {
             self.font_size = px(font_size);

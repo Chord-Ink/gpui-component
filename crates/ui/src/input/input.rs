@@ -92,6 +92,15 @@ fn exposes_accessibility_value(masked: bool, content_type: Option<InputContentTy
         )
 }
 
+/// How far a selection dims while its window is not the active one.
+///
+/// Half strength, which is where Zed's `UNFOCUS_EDITOR_SELECTION_OPACITY` and
+/// VS Code's `editor.inactiveSelectionBackground` default both land. Every
+/// desktop keeps the selection visible across deactivation — AppKit greys it,
+/// GTK washes it out — so that returning to the window still shows what was
+/// selected.
+const INACTIVE_SELECTION_OPACITY: f32 = 0.5;
+
 /// Returns `(background, foreground)` colors for input-like components.
 pub(crate) fn input_style(disabled: bool, cx: &App) -> (Hsla, Hsla) {
     if disabled {
@@ -374,24 +383,29 @@ impl RenderOnce for Input {
 
         state.ensure_highlighter_factory(crate::highlighter::input_highlighter_factory(), cx);
         state.set_editor_style(
-            gpui_base::input::InputEditorStyle {
-                foreground: cx.theme().foreground,
-                muted_foreground: cx.theme().muted_foreground,
-                background: cx.theme().editor_background(),
-                border: cx.theme().border,
-                selection: cx.theme().selection,
-                caret: cx.theme().caret,
-                diagnostics: gpui_base::input::DiagnosticColors {
-                    error: cx.theme().highlight_theme.style.status.error(cx),
-                    warning: cx.theme().highlight_theme.style.status.warning(cx),
-                    info: cx.theme().highlight_theme.style.status.info(cx),
-                    hint: cx.theme().highlight_theme.style.status.hint(cx),
-                },
-                highlight_styles: cx.theme().highlight_theme.clone(),
-                editor_invisible: cx.theme().highlight_theme.style.editor_invisible,
-                editor_active_line: cx.theme().highlight_theme.style.editor_active_line,
-                editor_gutter_background: cx.theme().highlight_theme.style.editor_gutter_background,
-                fold_icon_renderer: Some(Rc::new(|ix, is_folded| {
+            gpui_base::input::InputEditorStyle::new()
+                .with_foreground(cx.theme().foreground)
+                .with_muted_foreground(cx.theme().muted_foreground)
+                .with_background(cx.theme().editor_background())
+                .with_border(cx.theme().border)
+                .with_selection(cx.theme().selection_color())
+                .with_selection_foreground(cx.theme().selection_foreground)
+                .with_inactive_selection_opacity(INACTIVE_SELECTION_OPACITY)
+                .with_caret(cx.theme().caret_style())
+                .with_diagnostics(
+                    gpui_base::input::DiagnosticColors::new()
+                        .with_error(cx.theme().highlight_theme.style.status.error(cx))
+                        .with_warning(cx.theme().highlight_theme.style.status.warning(cx))
+                        .with_info(cx.theme().highlight_theme.style.status.info(cx))
+                        .with_hint(cx.theme().highlight_theme.style.status.hint(cx)),
+                )
+                .with_highlight_styles(cx.theme().highlight_theme.clone())
+                .with_editor_invisible(cx.theme().highlight_theme.style.editor_invisible)
+                .with_editor_active_line(cx.theme().highlight_theme.style.editor_active_line)
+                .with_editor_gutter_background(
+                    cx.theme().highlight_theme.style.editor_gutter_background,
+                )
+                .with_fold_icon_renderer(Some(Rc::new(|ix, is_folded| {
                     Button::new(("fold-icon", ix))
                         .ghost()
                         .icon(if is_folded {
@@ -404,8 +418,7 @@ impl RenderOnce for Input {
                         .size(px(14.))
                         .selected(is_folded)
                         .into_any_element()
-                })),
-            },
+                }))),
             cx,
         );
         state.set_editor_paddings(

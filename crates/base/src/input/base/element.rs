@@ -17,7 +17,8 @@ use std::{ops::Range, rc::Rc};
 
 use crate::{
     Scrollbar,
-    input::{RopeExt as _, blink_cursor::CURSOR_WIDTH, display_map::LineLayout},
+    caret::font_caret_height,
+    input::{RopeExt as _, display_map::LineLayout},
 };
 
 use super::{
@@ -31,10 +32,10 @@ fn diagnostic_highlight_style(
     colors: crate::input::DiagnosticColors,
 ) -> HighlightStyle {
     let color = match severity {
-        crate::input::DiagnosticSeverity::Error => colors.error,
-        crate::input::DiagnosticSeverity::Warning => colors.warning,
-        crate::input::DiagnosticSeverity::Info => colors.info,
-        crate::input::DiagnosticSeverity::Hint => colors.hint,
+        crate::input::DiagnosticSeverity::Error => colors.error(),
+        crate::input::DiagnosticSeverity::Warning => colors.warning(),
+        crate::input::DiagnosticSeverity::Info => colors.info(),
+        crate::input::DiagnosticSeverity::Hint => colors.hint(),
     };
     HighlightStyle {
         underline: Some(UnderlineStyle {
@@ -79,6 +80,37 @@ fn compose_decorations(
     // Decorations are application-authored overrides and must win over syntax
     // and semantic highlighting when both set the same style property.
     Some(gpui::combine_highlights(styles, visible_decorations).collect())
+}
+
+/// Recolor the selected text, when the styled layer asked for a color.
+///
+/// The selection is the topmost highlight, so this wins over syntax, semantic,
+/// application and diagnostic styles alike — but it sets only `color`, so an
+/// underline or background beneath it survives.
+fn compose_selection_foreground(
+    styles: Option<Vec<(Range<usize>, HighlightStyle)>>,
+    selection: Range<usize>,
+    foreground: Option<Hsla>,
+    visible_byte_range: Range<usize>,
+) -> Option<Vec<(Range<usize>, HighlightStyle)>> {
+    let Some(color) = foreground else {
+        return styles;
+    };
+    if selection.is_empty() {
+        return styles;
+    }
+
+    compose_decorations(
+        styles.unwrap_or_default(),
+        [(
+            selection,
+            HighlightStyle {
+                color: Some(color),
+                ..Default::default()
+            },
+        )],
+        visible_byte_range,
+    )
 }
 
 fn compose_decoration_collections<'a>(
@@ -379,14 +411,21 @@ fn empty_bottom_height(
     }
 }
 
-/// Ascent plus descent of the shaped text on the caret's own line — the height
-/// a browser gives its caret. A fraction of the line height drifts from the
-/// text whenever the line box is looser or tighter than the face.
+/// Ascent plus descent of the shaped text on the caret's own line, rounded to
+/// a whole pixel — the height Blink, Gecko, GTK, Qt and the Win32 edit control
+/// all give their caret. A fraction of the line height drifts from the text
+/// whenever the line box is looser or tighter than the face.
 ///
 /// A line shaped from no runs — an empty field, a blank line — reports zero
-/// metrics, so measure the first line that carries any, and fall back to a
-/// fraction of the line height only when no visible line does.
-fn caret_height(lines: &[LineLayout], caret_line: Option<usize>, line_height: Pixels) -> Pixels {
+/// metrics, so measure the first line that carries any, and ask the field's own
+/// font when no visible line does. That last step is what keeps an empty field
+/// and its first keystroke the same height.
+fn caret_height(
+    lines: &[LineLayout],
+    caret_line: Option<usize>,
+    line_height: Pixels,
+    window: &Window,
+) -> Pixels {
     let measured = |ix: usize| -> Option<Pixels> {
         lines
             .get(ix)?
@@ -396,10 +435,20 @@ fn caret_height(lines: &[LineLayout], caret_line: Option<usize>, line_height: Pi
             .filter(|height| *height > px(0.))
     };
 
+    let from_font = || {
+        let font_size = window.text_style().font_size.to_pixels(window.rem_size());
+        let height = font_caret_height(font_size, window);
+        (height > px(0.)).then_some(height)
+    };
+
     caret_line
         .and_then(measured)
         .or_else(|| (0..lines.len()).find_map(measured))
+        .or_else(from_font)
+        // Only reachable when the font itself reports nothing.
         .unwrap_or(0.85 * line_height)
+        .round()
+        .max(px(1.))
 }
 
 /// Layout information for fold icons.
@@ -470,7 +519,7 @@ impl<M: InputModeKind> TextElement<M> {
         last_layout: &LastLayout,
         bounds: &mut Bounds<Pixels>,
         scroll_size: Size<Pixels>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut App,
     ) -> (Option<Bounds<Pixels>>, Point<Pixels>, Option<usize>) {
         let state = self.state.read(cx);
@@ -532,6 +581,7 @@ impl<M: InputModeKind> TextElement<M> {
         let cursor_start = caret_for(sel_start_row, selected_range.start, false);
         let cursor_end = caret_for(sel_end_row, selected_range.end, false);
 
+        let caret = state.editor_style.caret();
         let cursor_bounds = {
             let selection_changed = state.last_selected_range != Some(selected_range);
             let auto_scrolling = state.auto_scroll.is_active();
@@ -541,7 +591,7 @@ impl<M: InputModeKind> TextElement<M> {
                 let safety_margin = match last_layout.text_align {
                     TextAlign::Left => RIGHT_MARGIN,
                     TextAlign::Right => px(0.),
-                    TextAlign::Center => CURSOR_WIDTH,
+                    TextAlign::Center => caret.width(),
                 };
 
                 scroll_offset.x = if scroll_offset.x + cursor_pos.x
@@ -606,6 +656,7 @@ impl<M: InputModeKind> TextElement<M> {
                 lines,
                 visible_buffer_lines.iter().position(|&bl| bl == cursor_row),
                 line_height,
+                window,
             );
 
             // Match the caret to the deferred scroll target (applied below) that
@@ -616,11 +667,18 @@ impl<M: InputModeKind> TextElement<M> {
                 .map(|offset| offset.x)
                 .unwrap_or(scroll_offset.x);
 
+            // A caret wider than a pixel straddles the character boundary
+            // instead of covering the glyph that follows it. It stops at the
+            // left edge of the text: the field clips there and the gutter
+            // paints over it, so a caret at column 0 would otherwise lose half
+            // its width.
+            let text_left = bounds.left() + line_number_width;
+            let cursor_x = bounds.left() + cursor_pos.x + line_number_width + cursor_scroll_x;
+            let cursor_x = (cursor_x - caret.boundary_offset()).max(cursor_x.min(text_left));
             // For Right alignment, clamp cursor within the right edge of bounds so it
             // stays visible without having to shift the text via scroll_offset.
-            let cursor_x = bounds.left() + cursor_pos.x + line_number_width + cursor_scroll_x;
             let cursor_x = if last_layout.text_align == TextAlign::Right {
-                cursor_x.min(bounds.right() - CURSOR_WIDTH)
+                cursor_x.min(bounds.right() - caret.width())
             } else {
                 cursor_x
             };
@@ -629,7 +687,7 @@ impl<M: InputModeKind> TextElement<M> {
                     cursor_x,
                     bounds.top() + cursor_pos.y + ((line_height - cursor_height) / 2.),
                 ),
-                size(CURSOR_WIDTH, cursor_height),
+                size(caret.width(), cursor_height),
             ))
         };
 
@@ -1019,8 +1077,8 @@ impl<M: InputModeKind> TextElement<M> {
 
         let invisible_color = state
             .editor_style
-            .editor_invisible
-            .unwrap_or(state.editor_style.muted_foreground);
+            .editor_invisible()
+            .unwrap_or(state.editor_style.muted_foreground());
 
         let space_font_size = text_size.half();
         let tab_font_size = text_size;
@@ -1088,7 +1146,7 @@ impl<M: InputModeKind> TextElement<M> {
         }
 
         let completion_text = &completion_item.insert_text;
-        let completion_color = state.editor_style.muted_foreground.opacity(0.5);
+        let completion_color = state.editor_style.muted_foreground().opacity(0.5);
 
         let text_style = window.text_style();
         let font = text_style.font();
@@ -1232,8 +1290,7 @@ impl<M: InputModeKind> TextElement<M> {
                 .state
                 .read(cx)
                 .editor_style
-                .fold_icon_renderer
-                .as_ref()
+                .fold_icon_renderer()
                 .map(|render| render(ix, info.is_folded))
                 .unwrap_or_else(|| {
                     let (path, svg) = if info.is_folded {
@@ -1441,6 +1498,8 @@ impl<M: InputModeKind> TextElement<M> {
         let state = self.state.read(cx);
         let text = &state.text;
         let is_multi_line = state.is_multi_line();
+        let selection_foreground = state.editor_style.selection_foreground();
+        let selected_range = state.selected_range.start..state.selected_range.end;
 
         let (mut highlighter, diagnostics) = match &state.mode {
             LayoutMode::CodeEditor {
@@ -1451,9 +1510,14 @@ impl<M: InputModeKind> TextElement<M> {
             _ => {
                 return (!state.masked)
                     .then(|| {
-                        compose_decoration_collections(
-                            Vec::new(),
-                            state.extras.decoration_layers().into_iter(),
+                        compose_selection_foreground(
+                            compose_decoration_collections(
+                                Vec::new(),
+                                state.extras.decoration_layers().into_iter(),
+                                visible_byte_range.clone(),
+                            ),
+                            selected_range.clone(),
+                            selection_foreground,
                             visible_byte_range,
                         )
                     })
@@ -1463,9 +1527,14 @@ impl<M: InputModeKind> TextElement<M> {
         let Some(highlighter) = highlighter.as_mut() else {
             return (!state.masked)
                 .then(|| {
-                    compose_decoration_collections(
-                        Vec::new(),
-                        state.extras.decoration_layers().into_iter(),
+                    compose_selection_foreground(
+                        compose_decoration_collections(
+                            Vec::new(),
+                            state.extras.decoration_layers().into_iter(),
+                            visible_byte_range.clone(),
+                        ),
+                        selected_range.clone(),
+                        selection_foreground,
                         visible_byte_range,
                     )
                 })
@@ -1494,7 +1563,7 @@ impl<M: InputModeKind> TextElement<M> {
                 } else {
                     highlighter.styles(
                         &(byte_start..byte_end),
-                        state.editor_style.highlight_styles.as_ref(),
+                        state.editor_style.highlight_styles().as_ref(),
                     )
                 };
 
@@ -1540,7 +1609,7 @@ impl<M: InputModeKind> TextElement<M> {
             .map(|entry| {
                 (
                     entry.range.clone(),
-                    diagnostic_highlight_style(entry.severity, state.editor_style.diagnostics),
+                    diagnostic_highlight_style(entry.severity, state.editor_style.diagnostics()),
                 )
             })
             .collect();
@@ -1552,7 +1621,7 @@ impl<M: InputModeKind> TextElement<M> {
         let custom_styles = state.extras.semantic_token_styles(
             text,
             &visible_byte_range,
-            state.editor_style.highlight_styles.as_ref(),
+            state.editor_style.highlight_styles().as_ref(),
         );
 
         // hover definition style
@@ -1579,7 +1648,12 @@ impl<M: InputModeKind> TextElement<M> {
         // composed styles back to the groups.
         styles = clip_styles_to_ranges(styles, &group_ranges);
 
-        Some(styles)
+        compose_selection_foreground(
+            Some(styles),
+            selected_range,
+            selection_foreground,
+            visible_byte_range,
+        )
     }
 }
 
@@ -1735,7 +1809,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
         let (display_text, text_color) = if is_empty {
             (
                 &Rope::from(placeholder.as_str()),
-                dim(state.editor_style.muted_foreground),
+                dim(state.editor_style.muted_foreground()),
             )
         } else if state.masked {
             (
@@ -2023,7 +2097,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             let other_line_runs = vec![TextRun {
                 len: line_number_len,
                 font: style.font(),
-                color: state.editor_style.muted_foreground,
+                color: state.editor_style.muted_foreground(),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
@@ -2031,7 +2105,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             let current_line_runs = vec![TextRun {
                 len: line_number_len,
                 font: style.font(),
-                color: state.editor_style.foreground,
+                color: state.editor_style.foreground(),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
@@ -2141,12 +2215,12 @@ impl<M: InputModeKind> Element for TextElement<M> {
 
         let invisible_top_padding = prepaint.last_layout.visible_top;
         let active_line_color = editor_style
-            .editor_active_line
+            .editor_active_line()
             .map(|color| if disabled { color.opacity(0.5) } else { color });
         let editor_background = if disabled {
-            editor_style.background.opacity(0.5)
+            editor_style.background().opacity(0.5)
         } else {
-            editor_style.background
+            editor_style.background()
         };
 
         // Paint active line
@@ -2177,31 +2251,44 @@ impl<M: InputModeKind> Element for TextElement<M> {
 
         // Paint indent guides
         if let Some(path) = prepaint.indent_guides_path.take() {
-            window.paint_path(path, editor_style.border.opacity(0.85));
+            window.paint_path(path, editor_style.border().opacity(0.85));
         }
 
         // Paint selections
-        if window.is_window_active() {
+        //
+        // The selection survives the window going inactive, dimmed rather than
+        // hidden, so a reader coming back can still see what they had selected.
+        // The decorations around it are the active window's working state and
+        // stay behind.
+        let window_active = window.is_window_active();
+        let selection = if window_active {
+            editor_style.selection()
+        } else {
+            editor_style
+                .selection()
+                .opacity(editor_style.inactive_selection_opacity())
+        };
+        if window_active {
             let secondary_selection = Hsla {
                 s: 0.1,
-                ..editor_style.selection
+                ..selection
             };
             for (path, is_active) in prepaint.search_match_paths.iter() {
                 window.paint_path(path.clone(), secondary_selection);
 
                 if *is_active {
-                    window.paint_path(path.clone(), editor_style.selection);
+                    window.paint_path(path.clone(), selection);
                 }
-            }
-
-            if let Some(path) = prepaint.selection_path.take() {
-                window.paint_path(path, editor_style.selection);
             }
 
             // Paint hover highlight
             if let Some(path) = prepaint.hover_highlight_path.take() {
                 window.paint_path(path, secondary_selection);
             }
+        }
+
+        if let Some(path) = prepaint.selection_path.take() {
+            window.paint_path(path, selection);
         }
 
         // Paint document colors
@@ -2291,7 +2378,14 @@ impl<M: InputModeKind> Element for TextElement<M> {
         // Paint blinking cursor
         if focused && show_cursor {
             if let Some(cursor_bounds) = prepaint.cursor_bounds_with_scroll() {
-                window.paint_quad(fill(cursor_bounds, editor_style.caret));
+                let caret = editor_style.caret();
+                // Snap at paint so a fractional device scale cannot blur the
+                // caret's edges, the way every browser engine does.
+                let cursor_bounds = window.pixel_snap_bounds(cursor_bounds);
+                window.paint_quad(
+                    fill(cursor_bounds, caret.color())
+                        .corner_radii(caret.clamped_radius(cursor_bounds.size)),
+                );
             }
         }
 
@@ -2305,7 +2399,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             // provide a dedicated gutter color, and cover the complete gutter so
             // text cannot show through its right-side spacing/fold-icon area.
             let gutter_bg = editor_style
-                .editor_gutter_background
+                .editor_gutter_background()
                 .unwrap_or(editor_background);
             let gutter_bounds = editor_gutter_bounds(
                 input_bounds,
@@ -2628,6 +2722,84 @@ fn split_runs_by_bg_segments(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn colored(color: Hsla) -> HighlightStyle {
+        HighlightStyle {
+            color: Some(color),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_unset_selection_foreground_leaves_every_glyph_its_own_color() {
+        let syntax = vec![(0..8, colored(gpui::red()))];
+
+        let styles = compose_selection_foreground(Some(syntax.clone()), 2..6, None, 0..8);
+
+        assert_eq!(
+            styles.map(|styles| styles.len()),
+            Some(1),
+            "the styles pass through untouched"
+        );
+    }
+
+    #[test]
+    fn an_empty_selection_recolors_nothing() {
+        let syntax = vec![(0..8, colored(gpui::red()))];
+
+        let styles =
+            compose_selection_foreground(Some(syntax), 4..4, Some(gpui::white()), 0..8).unwrap();
+
+        assert_eq!(styles.len(), 1);
+        assert_eq!(styles[0].1.color, Some(gpui::red()));
+    }
+
+    #[test]
+    fn a_selection_foreground_outranks_the_syntax_color_it_covers() {
+        let syntax = vec![(0..8, colored(gpui::red()))];
+
+        let styles =
+            compose_selection_foreground(Some(syntax), 2..6, Some(gpui::white()), 0..8).unwrap();
+
+        let color_at = |offset: usize| {
+            styles
+                .iter()
+                .find(|(range, _)| range.contains(&offset))
+                .and_then(|(_, style)| style.color)
+        };
+
+        assert_eq!(color_at(0), Some(gpui::red()), "outside the selection");
+        assert_eq!(color_at(3), Some(gpui::white()), "inside it");
+        assert_eq!(color_at(7), Some(gpui::red()), "and outside again");
+    }
+
+    #[test]
+    fn a_selection_foreground_leaves_an_underline_beneath_it_alone() {
+        let diagnostic = HighlightStyle {
+            color: Some(gpui::red()),
+            underline: Some(UnderlineStyle {
+                color: Some(gpui::red()),
+                thickness: px(1.),
+                wavy: true,
+            }),
+            ..Default::default()
+        };
+
+        let styles = compose_selection_foreground(
+            Some(vec![(0..8, diagnostic)]),
+            0..8,
+            Some(gpui::white()),
+            0..8,
+        )
+        .unwrap();
+
+        let style = styles.first().expect("one run").1;
+        assert_eq!(style.color, Some(gpui::white()), "the glyph is recolored");
+        assert!(
+            style.underline.is_some_and(|underline| underline.wavy),
+            "but the diagnostic underneath still marks the text"
+        );
+    }
 
     #[test]
     fn test_plain_text_decorations_include_unstyled_gaps() {

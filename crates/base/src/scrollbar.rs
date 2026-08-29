@@ -900,7 +900,7 @@ impl Scrollbar {
         default_border: Hsla,
     ) -> (Hsla, Hsla) {
         let theme = cx.theme();
-        let global = theme.scrollbar.styles();
+        let global = theme.scrollbar().styles();
         (
             state
                 .background
@@ -925,7 +925,7 @@ impl Scrollbar {
         defaults: ScrollbarThumbStyle,
     ) -> (Background, Pixels, Pixels, Pixels, Pixels) {
         let theme = cx.theme();
-        let global = theme.scrollbar.styles();
+        let global = theme.scrollbar().styles();
         (
             state
                 .background
@@ -981,7 +981,7 @@ impl Scrollbar {
         cx: &App,
     ) -> (Background, Hsla, Hsla, Pixels, Pixels, Pixels, Pixels) {
         let theme = cx.theme();
-        let global = theme.scrollbar.styles();
+        let global = theme.scrollbar().styles();
         let (track, border) = self.resolve_track(
             cx,
             &self.styles.track_active,
@@ -1007,7 +1007,7 @@ impl Scrollbar {
         cx: &App,
     ) -> (Background, Hsla, Hsla, Pixels, Pixels, Pixels, Pixels) {
         let theme = cx.theme();
-        let global = theme.scrollbar.styles();
+        let global = theme.scrollbar().styles();
         let (track, border) = self.resolve_track(
             cx,
             &self.styles.track_active,
@@ -1033,7 +1033,7 @@ impl Scrollbar {
         cx: &App,
     ) -> (Background, Hsla, Hsla, Pixels, Pixels, Pixels, Pixels) {
         let theme = cx.theme();
-        let global = theme.scrollbar.styles();
+        let global = theme.scrollbar().styles();
         let (track, border) = self.resolve_track(
             cx,
             &self.styles.track_hover,
@@ -1059,7 +1059,7 @@ impl Scrollbar {
         cx: &App,
     ) -> (Background, Hsla, Hsla, Pixels, Pixels, Pixels, Pixels) {
         let theme = cx.theme();
-        let global = theme.scrollbar.styles();
+        let global = theme.scrollbar().styles();
 
         let (track, border) = self.resolve_track(
             cx,
@@ -1169,8 +1169,8 @@ impl Element for Scrollbar {
 
         let now = Instant::now();
         let base_theme = cx.theme();
-        let mode = self.mode.unwrap_or(base_theme.scrollbar.mode());
-        let motion = base_theme.scrollbar.motion();
+        let mode = self.mode.unwrap_or(base_theme.scrollbar().mode());
+        let motion = base_theme.scrollbar().motion();
         // Always-visible scrollbars skip visibility motion but still animate
         // their activity width. Reduced motion snaps every channel.
         let reduce_motion = cx.reduce_motion();
@@ -1247,7 +1247,7 @@ impl Element for Scrollbar {
                 .styles
                 .track
                 .width
-                .or(cx.theme().scrollbar.styles().track.width)
+                .or(cx.theme().scrollbar().styles().track.width)
                 .unwrap_or(WIDTH);
             let (scroll_area_size, container_size, scroll_position) = if is_vertical {
                 (
@@ -1426,7 +1426,7 @@ impl Element for Scrollbar {
     ) {
         let scrollbar_state = &prepaint.scrollbar_state;
         let theme = cx.theme();
-        let mode = self.mode.unwrap_or(theme.scrollbar.mode());
+        let mode = self.mode.unwrap_or(theme.scrollbar().mode());
         let view_id = window.current_view();
         let hitbox_bounds = prepaint.hitbox.bounds;
         let is_hover_to_show = mode.is_hover();
@@ -1435,7 +1435,7 @@ impl Element for Scrollbar {
             for state in prepaint.states.iter() {
                 let axis = state.axis;
                 let mut radius = state.radius;
-                if theme.tokens.radius.md.is_zero() {
+                if theme.tokens().radius.md.is_zero() {
                     radius = px(0.);
                 }
                 radius = clamp_thumb_radius(radius, state.thumb_fill_bounds);
@@ -2168,14 +2168,18 @@ mod tests {
             let theme_thumb = gpui::hsla(0.2, 0.3, 0.4, 1.0);
             let instance_thumb = gpui::hsla(0.3, 0.4, 0.5, 1.0);
 
-            crate::Theme::global_mut(cx).scrollbar = crate::ScrollbarTheme::new()
-                .with_mode(ScrollbarMode::Always)
-                .with_motion(ScrollbarMotion::default())
-                .with_styles(
-                    ScrollbarStyles::default()
-                        .track(|style| style.width(px(13.)).bg(theme_track))
-                        .thumb(|style| style.width(px(7.)).bg(theme_thumb)),
-                );
+            crate::Theme::update(cx, |theme| {
+                theme.with_scrollbar(
+                    crate::ScrollbarTheme::new()
+                        .with_mode(ScrollbarMode::Always)
+                        .with_motion(ScrollbarMotion::default())
+                        .with_styles(
+                            ScrollbarStyles::default()
+                                .track(|style| style.width(px(13.)).bg(theme_track))
+                                .thumb(|style| style.width(px(7.)).bg(theme_thumb)),
+                        ),
+                )
+            });
 
             let scrollbar = Scrollbar::new(&TestHandle::new(Size::default()))
                 .styles(|styles| styles.thumb(|style| style.bg(instance_thumb)));
@@ -2184,7 +2188,7 @@ mod tests {
             assert_eq!(thumb, Background::from(instance_thumb));
             assert_eq!(track, theme_track);
             assert_eq!(width, px(7.));
-            assert_eq!(cx.theme().scrollbar.styles().track.width, Some(px(13.)));
+            assert_eq!(cx.theme().scrollbar().styles().track.width, Some(px(13.)));
         });
     }
 

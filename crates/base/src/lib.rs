@@ -14,6 +14,7 @@ mod auto_scroll;
 mod avatar;
 mod button;
 mod calendar;
+mod caret;
 mod checkbox;
 mod collapsible;
 mod color_picker;
@@ -79,6 +80,7 @@ pub use calendar::{
     Calendar, CalendarEvent, CalendarItem, CalendarItemKind, CalendarItemState, CalendarState,
     CalendarView, Date, IntervalMatcher, Matcher, RangeMatcher,
 };
+pub use caret::{CaretMotion, CaretStyle, font_caret_height};
 pub use checkbox::{
     Checkbox, CheckboxIndicator, CheckboxIndicatorStyles, CheckboxState, CheckboxStyles,
 };

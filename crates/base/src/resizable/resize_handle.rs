@@ -145,9 +145,9 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
             let state = state.unwrap_or(ResizeHandleState::default());
 
             let bg_color = if state.is_active() {
-                cx.theme().resizable.active_handle
+                cx.theme().resizable().active_handle()
             } else {
-                cx.theme().resizable.handle
+                cx.theme().resizable().handle()
             };
 
             let mut el = div()

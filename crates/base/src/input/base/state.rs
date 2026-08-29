@@ -31,7 +31,6 @@ use super::{
     undo_manager::{EditIntent, UndoManager},
 };
 use crate::actions::{SelectDown, SelectLeft, SelectRight, SelectUp};
-use crate::input::blink_cursor::CURSOR_WIDTH;
 use crate::input::movement::MoveDirection;
 use crate::input::{
     InputExtras as _, Position, RopeExt as _, Selection, element::RIGHT_MARGIN, layout::LastLayout,
@@ -1811,7 +1810,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         let safe_x_offset = if self.text_align == TextAlign::Left {
             px(0.)
         } else {
-            -CURSOR_WIDTH
+            -self.editor_style.caret().width()
         };
 
         let safe_y_range =
@@ -1861,7 +1860,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         let safety_margin = match last_layout.text_align {
             TextAlign::Left => RIGHT_MARGIN,
             TextAlign::Right => px(0.),
-            TextAlign::Center => CURSOR_WIDTH,
+            TextAlign::Center => self.editor_style.caret().width(),
         };
         if let Some(line) = last_layout
             .lines

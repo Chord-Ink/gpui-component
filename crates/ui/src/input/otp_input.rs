@@ -1,6 +1,7 @@
 use gpui::{
     AnyElement, App, Entity, Focusable, InteractiveElement as _, IntoElement, MouseButton,
-    ParentElement as _, RenderOnce, Styled as _, Window, div, prelude::FluentBuilder, px,
+    ParentElement as _, Pixels, RenderOnce, Styled as _, Window, div, prelude::FluentBuilder, px,
+    size,
 };
 
 use super::input::input_style;
@@ -71,6 +72,15 @@ impl Sizable for OtpInput {
         self
     }
 }
+/// Ascent plus descent of the cell's own font, rounded to a whole pixel — the
+/// height the text field gives its caret, so an OTP cell and a text field show
+/// the same caret at the same text size.
+fn caret_cell_height(text_size: Pixels, window: &Window) -> Pixels {
+    gpui_base::font_caret_height(text_size, window)
+        .round()
+        .max(px(1.))
+}
+
 impl RenderOnce for OtpInput {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         sync_focused_input_registry(self.state.clone(), window, cx);
@@ -85,6 +95,12 @@ impl RenderOnce for OtpInput {
             Size::Large => px(18.),
             Size::Size(v) => v * 0.5,
         };
+
+        // The same caret the Input draws, so the two never drift apart. A
+        // cell centers it, so it needs neither the boundary offset nor the
+        // line-box centering the text field applies.
+        let caret = cx.theme().caret_style();
+        let caret_height = caret_cell_height(text_size, window);
 
         let cursor_ix = state
             .value()
@@ -154,10 +170,13 @@ impl RenderOnce for OtpInput {
                         None => this.when(caret_visible, |this| {
                             this.child(
                                 div()
-                                    .h_4()
-                                    .w_0()
-                                    .border_l_3()
-                                    .border_color(cx.theme().caret),
+                                    .flex_none()
+                                    .w(caret.width())
+                                    .h(caret_height)
+                                    .rounded(
+                                        caret.clamped_radius(size(caret.width(), caret_height)),
+                                    )
+                                    .bg(caret.color()),
                             )
                         }),
                     })
