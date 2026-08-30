@@ -328,6 +328,6 @@ When working on tasks related to these areas, Claude Code will automatically use
 
 See `.claude/COMPONENT_TEST_RULES.md` for detailed testing principles:
 
-- **Simplicity First**: Focus on complex logic and core functionality, avoid excessive simple tests
-- **Builder Pattern Testing**: Every component should have a `test_*_builder` test covering the builder pattern
-- **Complex Logic Testing**: Test conditional branching, state transitions, and edge cases
+- **No test without logic**: Add a test only when it pins logic that could silently break. Coverage is not a goal.
+- **Never**: builder-chain tests, proofs that a type or path still exists, presentation constants, getter/setter round-trips.
+- **Do**: algorithms and data structures, interaction through `TestAppContext`, persisted-state round-trips, edge cases a bug exposed.

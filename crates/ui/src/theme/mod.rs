@@ -36,8 +36,7 @@ pub fn init(cx: &mut App) {
     Theme::sync_scrollbar_appearance(cx);
 
     // A caret and a selection left to the platform both follow the system
-    // insertion color, so repaint when the user picks another one. Never fires
-    // where the platform reports no system colors.
+    // insertion color, so repaint when the user picks another one.
     cx.on_system_colors_change(|cx| {
         let insertion_color = cx.text_insertion_color();
         let accent = cx.accent_color();
@@ -78,25 +77,18 @@ const SCROLLBAR_EXIT: Duration = Duration::from_millis(500);
 /// How long the thumb takes to reach its hovered or resting width.
 const SCROLLBAR_EXPAND: Duration = Duration::from_millis(300);
 
-/// The alpha a selection is painted at when the platform supplies its hue.
-///
-/// Inside the band every translucent implementation uses — GTK4 and
-/// WebKit-Adwaita 0.30, Gecko 0.31 in dark, Zed 0.24, Flutter 0.20 to 0.40 —
-/// and the same ceiling a theme's own selection color is clamped to.
+/// The alpha a selection is painted at when the platform supplies its hue, and
+/// the ceiling a theme's own selection color is clamped to.
 const SELECTION_ALPHA: f32 = 0.3;
 
-/// How long the caret rests in each of its two phases. Half a second is where
-/// Blink, Gecko and every editor that had to pick a number landed.
+/// How long the caret rests in each of its two phases.
 const CARET_BLINK_INTERVAL: Duration = Duration::from_millis(500);
-/// How long the caret is held visible after a keystroke before it resumes, one
-/// full phase, so a burst of typing never starts a blink mid-word.
+/// How long the caret is held visible after a keystroke, so a burst of typing
+/// never blinks mid-word.
 const CARET_BLINK_PAUSE: Duration = Duration::from_millis(500);
 
-/// The caret motion this design system projects onto Base.
-///
-/// Every desktop platform blinks its caret unless the user has asked it not
-/// to, so this one does too; a product turns it off through
-/// [`Theme::caret_motion`].
+/// The caret motion this design system projects onto Base. Turn blinking off
+/// through [`Theme::caret_motion`].
 fn caret_motion() -> CaretMotion {
     CaretMotion::new()
         .with_interval(CARET_BLINK_INTERVAL)
@@ -179,56 +171,32 @@ pub struct Theme {
     pub list: ListSettings,
     /// The sheet settings.
     pub sheet: SheetSettings,
-    /// Whether the caret takes the platform's own insertion-point color where
-    /// the platform has one.
+    /// Whether the caret takes the platform's own insertion-point color, which
+    /// only macOS 14 and later publishes.
     ///
-    /// macOS 14 and later paints its insertion point in a color of its own; no
-    /// other desktop does, and neither does the web, so this changes nothing
-    /// off macOS.
-    ///
-    /// It is derived from the active theme, not an application setting:
-    /// [`Theme::apply_config`] turns it off for a theme that names its own
-    /// `caret` color, because the named color is the more specific
-    /// instruction, and back on for one that does not. To pin a caret color,
-    /// name `caret` in the theme rather than writing here — the next theme
-    /// change would overwrite it.
+    /// Derived from the active theme: [`Theme::apply_config`] turns it off for
+    /// a theme that names `caret`. Pin a caret color by naming it there.
     #[serde(default = "default_true")]
     pub system_caret: bool,
-    /// Whether the selection takes the platform's own text-highlight color
-    /// where the platform has one.
+    /// Whether the selection takes the platform's own text-highlight color.
     ///
-    /// Derived from the active theme the same way [`Theme::system_caret`] is:
-    /// [`Theme::apply_config`] turns it off for a theme that names
-    /// `selection.background`, and back on for one that does not. To pin a
-    /// selection color, name it in the theme rather than writing here.
+    /// Derived from the active theme the way [`Theme::system_caret`] is, from
+    /// whether it names `selection.background`.
     #[serde(default = "default_true")]
     pub system_selection: bool,
-    /// The color selected text is recolored to, or `None` — the default — to
-    /// leave every glyph its own color.
-    ///
-    /// Windows, GTK3 and Qt all flip selected text to white, but each pairs
-    /// that with an opaque selection, where the flip is what keeps the text
-    /// readable. This library paints a translucent one, under which a flip
-    /// would only flatten the coloring the text already carried, so it is off
-    /// until a theme names `selection.foreground`.
+    /// The color selected text is recolored to, or `None` to leave every glyph
+    /// its own color. A translucent selection reads better without the flip, so
+    /// it is off until a theme names `selection.foreground`.
     #[serde(default)]
     pub selection_foreground: Option<Hsla>,
-    /// The color the system draws its own text insertion caret in, as of the
-    /// last time the platform reported one.
+    /// The color the system draws its own text insertion caret in, cached
+    /// because the platform call is too costly to make once per frame.
     ///
-    /// Read it through [`Theme::caret_color`]. The platform call behind it is
-    /// not cheap enough to make once per element per frame, so it is cached
-    /// here and refreshed on [`Theme::change`] — which is where a light/dark
-    /// switch lands, and a system color resolves to a different shade in each —
-    /// and whenever the user picks another one.
+    /// Read it through [`Theme::caret_color`]; [`Theme::change`] refreshes it.
     #[serde(skip)]
     pub system_insertion_color: Option<Hsla>,
-    /// The desktop's accent color, as of the last time the platform reported
-    /// one.
-    ///
-    /// Cached and refreshed the same way [`Self::system_insertion_color`] is.
-    /// It supplies the selection hue on the platforms that have no separate
-    /// text-highlight color of their own — which is every one but macOS.
+    /// The desktop's accent color, cached the way [`Self::system_insertion_color`]
+    /// is. It supplies the selection hue everywhere but macOS.
     #[serde(skip)]
     pub system_accent: Option<Hsla>,
     /// How the caret blinks, for every input and OTP field.
@@ -355,9 +323,8 @@ impl Theme {
         }
     }
 
-    /// This theme projected onto the Base layer, which owns the scrollbar,
-    /// the resize handles and the caret's blink timer, and reads the semantic
-    /// tokens.
+    /// This theme projected onto the Base layer, which owns the scrollbar, the
+    /// resize handles and the caret's blink timer.
     fn base_theme(&self) -> gpui_base::Theme {
         gpui_base::Theme::new()
             .with_tokens(self.semantic_tokens())
@@ -397,11 +364,8 @@ impl Theme {
 
     /// Push the current theme down to the Base layer.
     ///
-    /// The Base layer holds its own copy of the theme — the semantic tokens,
-    /// the scrollbar and resize-handle styles, and the caret's blink timing —
-    /// because it paints those without going through `gpui-component`. [`Theme::change`] refreshes that
-    /// copy, but writing to the theme's public fields directly does not, so a
-    /// scrollbar keeps painting with the radius and colors it was last given.
+    /// Base holds its own copy, refreshed by [`Theme::change`]. Writing to the
+    /// public fields directly does not refresh it.
     ///
     /// Call this after mutating the theme through [`Theme::global_mut`]:
     ///
@@ -491,14 +455,10 @@ impl Theme {
         }
     }
 
-    /// How the text insertion caret is drawn, following the conventions of the
-    /// platform the app is built for.
+    /// How the text insertion caret is drawn, following platform convention: a
+    /// two-point capsule on macOS, a square one-pixel bar everywhere else.
     ///
-    /// macOS has drawn a two-point capsule caret since Sonoma, in the color of
-    /// the system insertion point. Windows, GNOME, KDE and every browser
-    /// engine draw a square one-pixel bar in the text color, so that is what
-    /// the other targets get. A theme whose [`Theme::radius`] is zero squares
-    /// the caret too, the same way [`Theme::radius_full`] squares a pill.
+    /// A theme whose [`Theme::radius`] is zero squares the caret too.
     pub fn caret_style(&self) -> CaretStyle {
         let width = if cfg!(target_os = "macos") {
             px(2.)
@@ -519,21 +479,12 @@ impl Theme {
 
     /// The background painted behind selected text.
     ///
-    /// A theme that names `selection.background` owns it outright. When none
-    /// is named, the platform answers, each with the color it selects text
-    /// with: macOS its text-highlight color, Windows and Linux their accent —
-    /// which is what WinUI and GNOME both select with — and the web, which
-    /// publishes neither, with [`ThemeColor::selection`].
+    /// A theme that names `selection.background` owns it. Otherwise the
+    /// platform answers: macOS its text-highlight color, Windows and Linux
+    /// their accent, and the web [`ThemeColor::selection`].
     ///
-    /// The alpha is this library's, not the platform's. AppKit hands out a
-    /// pale tint meant to be filled opaque behind the glyphs; a wash laid over
-    /// syntax-highlighted text needs the saturated form instead — which is the
-    /// same color the caret takes, so the two cannot disagree about the hue.
-    ///
-    /// The text under it keeps its own color. Every platform that recolors
-    /// selected text pairs that with an opaque fill, where the flip is what
-    /// keeps the text readable; under a wash it would only flatten the syntax
-    /// colors it covers.
+    /// The alpha is this library's, since a wash over syntax-highlighted text
+    /// needs the saturated color rather than AppKit's opaque-fill tint.
     pub fn selection_color(&self) -> Hsla {
         if self.system_selection {
             self.system_insertion_color
@@ -547,14 +498,9 @@ impl Theme {
 
     /// The color the caret is painted in.
     ///
-    /// A theme that names a `caret` color owns it outright. When none is
-    /// named, the platform answers: macOS 14 and later with the color AppKit
-    /// gives its own insertion point, and everything else with the text
-    /// foreground, which is where [`ThemeColor::caret`] falls back.
-    ///
-    /// That color follows System Settings > Appearance > Highlight color, not
-    /// the accent color — macOS ships highlight set to follow the accent, so
-    /// the two agree until the user sets highlight on its own.
+    /// A theme that names `caret` owns it. Otherwise macOS 14 and later answers
+    /// with its insertion-point color, which follows System Settings >
+    /// Appearance > Highlight, and everything else with the text foreground.
     pub fn caret_color(&self) -> Hsla {
         if self.system_caret {
             self.system_insertion_color.unwrap_or(self.caret)
@@ -896,21 +842,6 @@ mod caret_and_selection_tests {
     use super::*;
 
     #[test]
-    fn an_unnamed_caret_falls_back_to_the_text_foreground() {
-        for mode in [ThemeMode::Light, ThemeMode::Dark] {
-            let colors = if mode.is_dark() {
-                ThemeColor::dark()
-            } else {
-                ThemeColor::light()
-            };
-            assert_eq!(
-                colors.caret, colors.foreground,
-                "the built-in {mode:?} theme names no caret, so it takes the text color"
-            );
-        }
-    }
-
-    #[test]
     fn a_named_caret_color_outranks_the_system_one() {
         let system = gpui::red();
         let named = gpui::blue();
@@ -921,7 +852,6 @@ mod caret_and_selection_tests {
         theme.system_caret = true;
         assert_eq!(theme.caret_color(), system);
 
-        // Which is what applying a theme that names `caret` does.
         theme.system_caret = false;
         assert_eq!(theme.caret_color(), named);
     }
@@ -941,7 +871,6 @@ mod caret_and_selection_tests {
             "an unnamed selection takes the platform hue at this library's own alpha"
         );
 
-        // Which is what applying a theme that names `selection.background` does.
         theme.system_selection = false;
         assert_eq!(theme.selection_color(), named);
     }
@@ -954,7 +883,7 @@ mod caret_and_selection_tests {
         theme.system_caret = true;
         theme.system_accent = Some(accent);
 
-        // Windows and Linux: an accent, but no text-insertion color of their own.
+        // Windows and Linux: an accent, but no text-insertion color.
         theme.system_insertion_color = None;
 
         assert_eq!(theme.selection_color(), accent.opacity(SELECTION_ALPHA));
@@ -980,23 +909,6 @@ mod caret_and_selection_tests {
     }
 
     #[test]
-    fn the_caret_and_the_selection_share_one_hue() {
-        let mut theme = Theme::default();
-        theme.system_insertion_color = Some(gpui::red());
-        theme.system_caret = true;
-        theme.system_selection = true;
-
-        let caret = theme.caret_color();
-        let selection = theme.selection_color();
-
-        assert_eq!(
-            (caret.h, caret.s),
-            (selection.h, selection.s),
-            "on a platform that supplies both, they are one setting at two alphas"
-        );
-    }
-
-    #[test]
     fn a_platform_reporting_no_insertion_color_keeps_the_theme_color() {
         let mut theme = Theme::default();
         theme.caret = gpui::blue();
@@ -1006,13 +918,5 @@ mod caret_and_selection_tests {
 
         assert_eq!(theme.caret_color(), gpui::blue());
         assert_eq!(theme.selection_color(), theme.selection);
-    }
-
-    #[test]
-    fn squaring_the_theme_squares_the_caret() {
-        let mut theme = Theme::default();
-        theme.radius = px(0.);
-
-        assert_eq!(theme.caret_style().radius(), px(0.));
     }
 }

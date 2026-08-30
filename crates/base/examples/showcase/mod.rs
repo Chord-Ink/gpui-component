@@ -161,8 +161,7 @@ pub struct BaseShowcase {
     text_selection_footer_bounds: Rc<std::cell::RefCell<Option<gpui::Bounds<gpui::Pixels>>>>,
 }
 
-/// The colors every input in the showcase paints with. Base ships no palette
-/// of its own, so an application supplies one.
+/// The colors every input in the showcase paints with.
 fn showcase_editor_style() -> InputEditorStyle {
     InputEditorStyle::new()
         .with_foreground(rgb(0x171717).into())

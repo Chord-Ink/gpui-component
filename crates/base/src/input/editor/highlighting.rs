@@ -112,10 +112,6 @@ impl DiagnosticColors {
 }
 
 /// Application-owned colors and highlight resolver consumed by editor painting.
-///
-/// The fields are private and reached through the methods below, so the styled
-/// layer can hand the editor another color — or another caret — without the
-/// addition breaking every caller that builds one.
 #[derive(Clone)]
 pub struct InputEditorStyle {
     foreground: Hsla,

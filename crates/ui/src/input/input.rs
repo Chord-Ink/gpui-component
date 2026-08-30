@@ -92,13 +92,8 @@ fn exposes_accessibility_value(masked: bool, content_type: Option<InputContentTy
         )
 }
 
-/// How far a selection dims while its window is not the active one.
-///
-/// Half strength, which is where Zed's `UNFOCUS_EDITOR_SELECTION_OPACITY` and
-/// VS Code's `editor.inactiveSelectionBackground` default both land. Every
-/// desktop keeps the selection visible across deactivation — AppKit greys it,
-/// GTK washes it out — so that returning to the window still shows what was
-/// selected.
+/// How far a selection dims while its window is not the active one. Half
+/// strength, where Zed and VS Code both land.
 const INACTIVE_SELECTION_OPACITY: f32 = 0.5;
 
 /// Returns `(background, foreground)` colors for input-like components.

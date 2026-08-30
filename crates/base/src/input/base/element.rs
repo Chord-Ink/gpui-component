@@ -84,9 +84,8 @@ fn compose_decorations(
 
 /// Recolor the selected text, when the styled layer asked for a color.
 ///
-/// The selection is the topmost highlight, so this wins over syntax, semantic,
-/// application and diagnostic styles alike — but it sets only `color`, so an
-/// underline or background beneath it survives.
+/// Topmost highlight, but it sets only `color`, so an underline or background
+/// beneath it survives.
 fn compose_selection_foreground(
     styles: Option<Vec<(Range<usize>, HighlightStyle)>>,
     selection: Range<usize>,
@@ -411,15 +410,12 @@ fn empty_bottom_height(
     }
 }
 
-/// Ascent plus descent of the shaped text on the caret's own line, rounded to
-/// a whole pixel — the height Blink, Gecko, GTK, Qt and the Win32 edit control
-/// all give their caret. A fraction of the line height drifts from the text
+/// Ascent plus descent of the shaped text on the caret's own line, rounded to a
+/// whole pixel. A fraction of the line height would drift from the text
 /// whenever the line box is looser or tighter than the face.
 ///
-/// A line shaped from no runs — an empty field, a blank line — reports zero
-/// metrics, so measure the first line that carries any, and ask the field's own
-/// font when no visible line does. That last step is what keeps an empty field
-/// and its first keystroke the same height.
+/// A line shaped from no runs reports zero metrics, so fall back to the first
+/// line that carries any, then to the field's own font.
 fn caret_height(
     lines: &[LineLayout],
     caret_line: Option<usize>,
@@ -648,10 +644,6 @@ impl<M: InputModeKind> TextElement<M> {
                 }
             }
 
-            // The caret spans the ascent and descent of the font on its own
-            // line, which is how a browser sizes it. A fraction of the line
-            // height drifts from the text whenever the line box is looser or
-            // tighter than the face.
             let cursor_height = caret_height(
                 lines,
                 visible_buffer_lines.iter().position(|&bl| bl == cursor_row),
@@ -667,11 +659,8 @@ impl<M: InputModeKind> TextElement<M> {
                 .map(|offset| offset.x)
                 .unwrap_or(scroll_offset.x);
 
-            // A caret wider than a pixel straddles the character boundary
-            // instead of covering the glyph that follows it. It stops at the
-            // left edge of the text: the field clips there and the gutter
-            // paints over it, so a caret at column 0 would otherwise lose half
-            // its width.
+            // A wide caret straddles the character boundary, but stops at the
+            // left edge of the text, where the field clips and the gutter paints.
             let text_left = bounds.left() + line_number_width;
             let cursor_x = bounds.left() + cursor_pos.x + line_number_width + cursor_scroll_x;
             let cursor_x = (cursor_x - caret.boundary_offset()).max(cursor_x.min(text_left));
@@ -2254,12 +2243,8 @@ impl<M: InputModeKind> Element for TextElement<M> {
             window.paint_path(path, editor_style.border().opacity(0.85));
         }
 
-        // Paint selections
-        //
-        // The selection survives the window going inactive, dimmed rather than
-        // hidden, so a reader coming back can still see what they had selected.
-        // The decorations around it are the active window's working state and
-        // stay behind.
+        // The selection dims rather than hides while the window is inactive, so
+        // returning to it still shows what was selected.
         let window_active = window.is_window_active();
         let selection = if window_active {
             editor_style.selection()
@@ -2379,8 +2364,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
         if focused && show_cursor {
             if let Some(cursor_bounds) = prepaint.cursor_bounds_with_scroll() {
                 let caret = editor_style.caret();
-                // Snap at paint so a fractional device scale cannot blur the
-                // caret's edges, the way every browser engine does.
+                // Snap so a fractional device scale cannot blur the caret's edges.
                 let cursor_bounds = window.pixel_snap_bounds(cursor_bounds);
                 window.paint_quad(
                     fill(cursor_bounds, caret.color())

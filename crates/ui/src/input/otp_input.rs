@@ -72,9 +72,8 @@ impl Sizable for OtpInput {
         self
     }
 }
-/// Ascent plus descent of the cell's own font, rounded to a whole pixel — the
-/// height the text field gives its caret, so an OTP cell and a text field show
-/// the same caret at the same text size.
+/// Ascent plus descent of the cell's own font, rounded to a whole pixel, so an
+/// OTP cell and a text field show the same caret at the same text size.
 fn caret_cell_height(text_size: Pixels, window: &Window) -> Pixels {
     gpui_base::font_caret_height(text_size, window)
         .round()
@@ -96,9 +95,7 @@ impl RenderOnce for OtpInput {
             Size::Size(v) => v * 0.5,
         };
 
-        // The same caret the Input draws, so the two never drift apart. A
-        // cell centers it, so it needs neither the boundary offset nor the
-        // line-box centering the text field applies.
+        // The same caret the Input draws; a cell centers it itself.
         let caret = cx.theme().caret_style();
         let caret_height = caret_cell_height(text_size, window);
 

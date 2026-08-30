@@ -4,8 +4,7 @@ use crate::{CaretMotion, Theme};
 
 /// To manage the Input cursor blinking.
 ///
-/// The timing comes from [`CaretMotion`] on the Base theme, so a styled layer
-/// can slow the blink or hold the caret steady without Base knowing why.
+/// The timing comes from [`CaretMotion`] on the Base theme.
 ///
 /// Every loop will notify the view to update the `visible`, and Input will observe this update to touch repaint.
 ///
@@ -32,11 +31,8 @@ impl BlinkCursor {
         Theme::global(cx).caret_motion()
     }
 
-    /// Show the caret and start blinking it.
-    ///
-    /// A field being focused lands here, so the caret has to appear now rather
-    /// than on the next tick: toggling would hide it for a whole interval when
-    /// it was already showing.
+    /// Show the caret and start blinking it. Focus lands here, so the caret
+    /// appears now rather than on the next tick.
     pub(crate) fn start(&mut self, cx: &mut Context<Self>) {
         self.paused = false;
         self.visible = true;
@@ -45,11 +41,8 @@ impl BlinkCursor {
         self.schedule(epoch, cx);
     }
 
-    /// Hide the caret and drop the timer.
-    ///
-    /// A field being blurred lands here, and it has to leave no state behind:
-    /// a pause still in flight would otherwise resume a blur'd field, and a
-    /// leftover `paused` would swallow the next [`Self::start`].
+    /// Hide the caret and drop the timer. Leaves no state behind, so a pause in
+    /// flight cannot resume a blurred field.
     pub(crate) fn stop(&mut self, cx: &mut Context<Self>) {
         self.paused = false;
         self.visible = false;
@@ -63,11 +56,8 @@ impl BlinkCursor {
         self.epoch
     }
 
-    /// Wait one interval, then blink — unless the caret is meant to hold still.
-    ///
-    /// A steady caret keeps an idle timer rather than dropping it, so turning
-    /// blinking back on reaches a field that is already focused. The timer is
-    /// silent: it only notifies when the caret actually changes.
+    /// Wait one interval, then blink. A steady caret keeps an idle timer, so
+    /// turning blinking back on reaches an already-focused field.
     fn schedule(&mut self, epoch: usize, cx: &mut Context<Self>) {
         let interval = Self::motion(cx).interval();
         self._task = cx.spawn(async move |this, cx| {
@@ -170,7 +160,6 @@ mod tests {
         let cursor = new_cursor(cx);
         cursor.update(cx, |cursor, cx| cursor.start(cx));
 
-        // Land on the hidden phase, then blur and come back.
         tick(cx, INTERVAL);
         assert!(!is_visible(&cursor, cx));
         cursor.update(cx, |cursor, cx| cursor.stop(cx));
@@ -180,8 +169,7 @@ mod tests {
             "clicking back into a field must not leave it caret-less for an interval"
         );
 
-        // Reactivating the window starts a field that never stopped, so start()
-        // has to hold a caret that is already showing rather than toggle it.
+        // Reactivating the window starts a field that never stopped.
         cursor.update(cx, |cursor, cx| cursor.start(cx));
         assert!(
             is_visible(&cursor, cx),
@@ -199,7 +187,6 @@ mod tests {
         cursor.update(cx, |cursor, cx| cursor.stop(cx));
         cursor.update(cx, |cursor, cx| cursor.start(cx));
 
-        // The pause that was in flight must not resume anything.
         tick(cx, PAUSE);
         assert!(
             !is_visible(&cursor, cx),

@@ -316,10 +316,8 @@ impl Switch {
         self
     }
 
-    /// Uses a caller-owned focus handle instead of creating keyed state.
-    ///
-    /// A switch that draws its focus ring on a child, such as a track nested
-    /// beside a label, needs the same handle the root tracks.
+    /// Uses a caller-owned focus handle instead of creating keyed state, for a
+    /// switch that draws its focus ring on a child.
     pub fn track_focus(mut self, focus_handle: &FocusHandle) -> Self {
         self.provided_focus_handle = Some(focus_handle.clone());
         self

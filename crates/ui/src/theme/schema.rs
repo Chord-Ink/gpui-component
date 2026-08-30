@@ -977,9 +977,8 @@ impl ThemeColor {
         apply_background_color!(scrollbar, fallback = tokens.background);
         apply_background_color!(scrollbar_thumb, fallback = tokens.accent);
         apply_background_color!(scrollbar_thumb_hover, fallback = tokens.scrollbar_thumb);
-        // A theme that names a primary gets its own hue here; one that names
-        // neither falls to the base blue rather than to a primary that a
-        // neutral palette leaves near-black.
+        // A theme that names a primary gets its own hue; one that names neither
+        // falls to the base blue, not to a near-black neutral primary.
         apply_background_color!(
             selection,
             fallback = if colors.primary.is_some() {
@@ -1092,16 +1091,13 @@ impl Theme {
             ThemeColor::light()
         };
 
-        // A theme that names its caret color owns it; only a theme that names
-        // none leaves the caret to the platform's own insertion-point color.
+        // A theme that names its caret owns it; otherwise the platform does.
         self.system_caret = config.colors.caret.is_none();
 
-        // And likewise for the selection, which on macOS is the same setting
-        // at a different tint.
+        // Likewise the selection, the same macOS setting at another tint.
         self.system_selection = config.colors.selection.is_none();
 
-        // Unset unless the theme names one, so selected text keeps whatever
-        // color it already carried.
+        // Unset unless named, so selected text keeps its own color.
         self.selection_foreground = config
             .colors
             .selection_foreground

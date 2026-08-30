@@ -189,8 +189,7 @@ impl RenderOnce for OtpInput {
         let state = self.state;
         div()
             .id(("base-otp-input", state.entity_id()))
-            // A code field is a form control: Tab must reach it, as it does
-            // the single-line input, unless it is disabled.
+            // A code field is a form control: Tab reaches it unless disabled.
             .track_focus(&state.read(cx).focus_handle.clone().tab_stop(!self.disabled))
             .when(!self.disabled, |this| {
                 this.on_key_down(window.listener_for(&state, OtpState::on_key_down))
