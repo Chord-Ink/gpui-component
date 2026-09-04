@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use instant::Instant;
+use web_time::Instant;
 
 use gpui::{
     Bounds, Context, Div, Hsla, InteractiveElement as _, IntoElement, ParentElement, PathBuilder,
@@ -21,6 +21,18 @@ use crate::{
 const DEFAULT_FRAME_BUDGET: Duration = Duration::from_nanos(16_666_667);
 const DEFAULT_CAPACITY: usize = 120;
 const DEFAULT_RESOURCE_INTERVAL: Duration = Duration::from_millis(500);
+
+/// How far back CPU, memory and GPU are averaged over. At the default interval
+/// that is six readings: long enough to settle the churn between one sample and
+/// the next, short enough that a real change reaches the HUD while the reader
+/// is still looking at what caused it.
+#[cfg(not(target_family = "wasm"))]
+const RESOURCE_WINDOW: Duration = Duration::from_secs(3);
+
+/// Which frame the `P95` row reports. The 95th rather than the 99th: the chart
+/// keeps 120 frames by default, so the 99th is the second slowest of them — one
+/// frame, which moves the row on its own and reads as noise.
+const FRAME_PERCENTILE: f32 = 0.95;
 
 /// How fast the chart's y axis relaxes back down after a spike. Growth is
 /// immediate so a slow frame is never clipped, while the decay is gradual so
@@ -62,11 +74,6 @@ const UNIT_WIDTH: Pixels = px(22.);
 /// fast enough to feel live.
 const READOUT_INTERVAL: Duration = Duration::from_millis(500);
 
-/// Fraction of the target frame rate that still counts as meeting it. Vsync and
-/// the sampling window each cost a frame or so a second, so a 60Hz display that
-/// is keeping up perfectly reports 58 to 60, never a flat 60.
-const FPS_TOLERANCE: f32 = 0.95;
-
 /// A monospace family that ships with the platform, so the value column stays
 /// aligned without the application having to configure a font. The generic
 /// `monospace` alias is not resolvable by every platform's font backend, hence
@@ -97,9 +104,18 @@ const DEFAULT_FONT: &str = "monospace";
 /// The numbers as last published to the screen.
 #[derive(Clone, Copy, Default)]
 struct Readout {
+    /// Frames presented per second.
     fps: f32,
+    /// Mean time between presents, in milliseconds: the platform overlay's
+    /// "frame interval", and `1000 / fps`.
+    interval_millis: f32,
+    /// Mean `Window::draw` cost of the retained frames, in milliseconds.
     frame_millis: f32,
+    /// The slow tail of the same frames `frame_millis` is the mean of.
+    percentile_millis: f32,
     dropped_percent: f32,
+    /// Mean invalidations coalesced into one frame; one means none were wasted.
+    invalidations: f32,
 }
 
 pub struct FpsMonitor {
@@ -170,6 +186,15 @@ impl FpsMonitor {
         self
     }
 
+    pub(crate) fn set_frame_budget(&mut self, budget: Duration) {
+        self.frame_budget = budget;
+        self.axis_max = budget.as_secs_f32() * 2.;
+    }
+
+    pub(crate) fn set_continuous(&mut self, continuous: bool) {
+        self.continuous = continuous;
+    }
+
     /// Whether to sample and show CPU, memory and GPU usage. Defaults to
     /// `true`, and is always off on the web.
     ///
@@ -204,7 +229,10 @@ impl FpsMonitor {
             // Probing walks the process table, so it never runs on the render
             // thread. The probe moves in and out of each background task rather
             // than living behind a lock.
-            let Some(mut probe) = executor.spawn(async { ResourceProbe::new() }).await else {
+            let Some(mut probe) = executor
+                .spawn(async { ResourceProbe::new(RESOURCE_WINDOW) })
+                .await
+            else {
                 return;
             };
 
@@ -248,10 +276,13 @@ impl FpsMonitor {
 
         self.readout = Readout {
             fps: self.sampler.fps(),
+            interval_millis: self.sampler.present_interval().as_secs_f32() * 1000.,
             // The mean over the interval rather than the latest frame, which
             // at this cadence would be an arbitrary sample.
             frame_millis: self.sampler.mean_draw().as_secs_f32() * 1000.,
+            percentile_millis: self.sampler.percentile_draw(FRAME_PERCENTILE).as_secs_f32() * 1000.,
             dropped_percent: self.sampler.over_budget_ratio(self.frame_budget) * 100.,
+            invalidations: self.sampler.mean_invalidations(),
         };
         self.readout_at = Some(now);
     }
@@ -398,10 +429,20 @@ impl Render for FpsMonitor {
         let budget = self.frame_budget;
         let Readout {
             fps,
+            interval_millis,
             frame_millis,
+            percentile_millis,
             dropped_percent: dropped,
+            invalidations,
         } = self.readout;
-        let fps_color = fps_color(fps, budget, style);
+        // Printed plain, never graded. A rate falls for reasons that are not
+        // this application being slow: the window was occluded, or nothing
+        // changed, or the display asked for fewer frames. Colouring it turns
+        // every one of those into an alarm, and the alarm contradicts the rows
+        // underneath -- 25 in red above a FRAME of 10ms in green, which is a
+        // frame drawn in a third of its budget. What costs too much is a
+        // question about frames, and `FRAME`, `P95` and `DROP` answer it.
+        let fps_color = style.foreground;
         let resources = self.resources.filter(|_| self.show_resources);
         let compact = self.compact;
 
@@ -443,22 +484,66 @@ impl Render for FpsMonitor {
                         .rounded(px(4.))
                         .child(self.render_headline(fps, fps_color))
                         .child(reading(
+                            // The same figure the platform overlay calls its
+                            // frame interval: time between presents, which is
+                            // the headline's reciprocal. Ungraded, like there.
+                            "INTERVAL",
+                            format!("{interval_millis:.1} ms"),
+                            style.foreground,
+                            style,
+                        ))
+                        .child(reading(
                             "FRAME",
                             format!("{frame_millis:.1} ms"),
-                            // Graded against the budget, not against the frame
-                            // rate. An idle window draws a handful of frames a
-                            // second, so the headline goes red while every one
-                            // of those frames was in fact drawn well inside the
-                            // budget; this row is what says so.
+                            // Graded against the budget, and the first reading
+                            // in the HUD that is: the rate above says how often
+                            // frames happened, this says whether they were
+                            // affordable. It is the one to read when something
+                            // feels slow.
                             style.level_color(frame_millis / 1000., budget.as_secs_f32()),
                             style,
                         ))
                         .child(reading(
-                            "DROP",
-                            format!("{dropped:.1}%"),
-                            style.level_color(if dropped > 0. { 1. } else { 0. }, 0.5),
+                            // Graded the same way, so the two millisecond rows
+                            // read as one measurement seen twice: what a frame
+                            // usually costs, and what its slow tail costs.
+                            "P95",
+                            format!("{percentile_millis:.1} ms"),
+                            style.level_color(percentile_millis / 1000., budget.as_secs_f32()),
                             style,
                         ))
+                        .child(
+                            // Dropped frames and wasted invalidations share a
+                            // row: both count redundant work rather than
+                            // measuring a duration, so neither belongs in the
+                            // millisecond column above.
+                            row()
+                                .child(pair(
+                                    "DROP",
+                                    format!("{dropped:.1}%"),
+                                    style.level_color(if dropped > 0. { 1. } else { 0. }, 0.5),
+                                    style,
+                                ))
+                                .child(pair(
+                                    "INV",
+                                    format!("{invalidations:.1}"),
+                                    // Ungraded, unlike every other reading in
+                                    // the HUD. One per frame is the ideal, but
+                                    // it is not the floor here: in continuous
+                                    // mode the monitor requests an animation
+                                    // frame of its own on every render, so an
+                                    // application invalidating once a frame
+                                    // measures two and a healthy HUD would sit
+                                    // permanently in the red. The baseline
+                                    // depends on that switch and on how the
+                                    // application drives its own redraws, which
+                                    // is not something the HUD can grade — so
+                                    // the number is reported and the reading is
+                                    // left to whoever knows what to expect.
+                                    style.foreground,
+                                    style,
+                                )),
+                        )
                         .when_some(
                             resources.and_then(|resources| resources.gpu_percent),
                             |this, gpu| {
@@ -475,20 +560,17 @@ impl Render for FpsMonitor {
                                 // CPU and memory share a row: both are coarse
                                 // background samples, unlike the per-frame
                                 // numbers.
-                                div()
-                                    .flex()
-                                    .w_full()
-                                    .justify_between()
-                                    .gap_2()
-                                    .py(px(1.))
+                                row()
                                     .child(pair(
                                         "CPU",
-                                        format!("{:.1}%", resources.cpu_percent),
+                                        format_cpu(resources.cpu_percent),
+                                        style.foreground,
                                         style,
                                     ))
                                     .child(pair(
                                         "MEM",
                                         format_bytes(resources.memory_bytes),
+                                        style.foreground,
                                         style,
                                     )),
                             )
@@ -498,37 +580,19 @@ impl Render for FpsMonitor {
     }
 }
 
-/// Grades the frame rate against the rate the budget implies.
-///
-/// This deliberately does not compare `1/fps` against the budget the way the
-/// per-frame trace does. Under vsync the measured rate lands just under the
-/// refresh rate essentially always — a 60Hz display reads 58 to 60, never
-/// exactly 60.00 — so an exact comparison would paint a perfectly healthy
-/// application as over budget. Anything within [`FPS_TOLERANCE`] of the target
-/// counts as meeting it.
-fn fps_color(fps: f32, budget: Duration, style: FpsStyle) -> Hsla {
-    if fps <= 0. {
-        return style.muted;
-    }
-
-    let target = 1. / budget.as_secs_f32();
-    if fps >= target * FPS_TOLERANCE {
-        style.good
-    } else if fps >= target * 0.5 {
-        style.warn
-    } else {
-        style.bad
-    }
+/// A row carrying two [`pair`]s, pushed to either inner edge.
+fn row() -> Div {
+    div().flex().w_full().justify_between().gap_2().py(px(1.))
 }
 
 /// A `LABEL value` pair kept together, for rows that carry more than one
 /// reading. The label stays muted so it reads as a caption, not as data.
-fn pair(label: &'static str, value: String, style: FpsStyle) -> Div {
+fn pair(label: &'static str, value: String, value_color: Hsla, style: FpsStyle) -> Div {
     div()
         .flex()
         .gap_1()
         .child(div().text_color(style.muted).child(label))
-        .child(div().text_color(style.foreground).child(value))
+        .child(div().text_color(value_color).child(value))
 }
 
 /// One `LABEL … value` row. The value is right aligned against the HUD's inner
@@ -543,6 +607,22 @@ fn reading(label: &'static str, value: String, value_color: Hsla, style: FpsStyl
         .py(px(1.))
         .child(div().text_color(style.muted).child(label))
         .child(div().text_color(value_color).child(value))
+}
+
+/// A CPU reading on the single core scale, which passes 100 as soon as the
+/// process spreads over more than one core and reaches the core count times a
+/// hundred when it saturates the machine.
+///
+/// A tenth is worth showing while the reading is small, where it is the
+/// difference between idle and a busy timer; past ten the extra digit only
+/// churns, and dropping it also keeps the reading inside the row's share of the
+/// HUD on a machine with enough cores to reach four figures.
+fn format_cpu(percent: f32) -> String {
+    if percent < 10. {
+        format!("{percent:.1}%")
+    } else {
+        format!("{percent:.0}%")
+    }
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -590,27 +670,23 @@ mod tests {
     }
 
     #[test]
-    fn a_display_keeping_up_is_never_graded_as_falling_behind() {
-        let style = FpsStyle::dark();
-        let budget = DEFAULT_FRAME_BUDGET;
-
-        // What a healthy 60Hz display actually reports.
-        for rate in [58., 59., 59.7, 60., 61.] {
-            assert_eq!(
-                fps_color(rate, budget, style),
-                style.good,
-                "{rate} fps should read as healthy on a 60Hz display"
-            );
-        }
-
-        assert_eq!(fps_color(45., budget, style), style.warn);
-        assert_eq!(fps_color(20., budget, style), style.bad);
-        assert_eq!(fps_color(0., budget, style), style.muted);
-    }
-
-    #[test]
     fn formats_memory_by_magnitude() {
         assert_eq!(format_bytes(184 * 1024 * 1024), "184 MB");
         assert_eq!(format_bytes(3 * 1024 * 1024 * 1024), "3.00 GB");
+    }
+
+    /// The reading is on the single core scale, so it passes 100 and keeps
+    /// going — the row must show that rather than round it away or clip it.
+    #[test]
+    fn formats_cpu_on_the_single_core_scale() {
+        // A process spread over a core and a half, which under a scale where
+        // 100 is the whole machine would have read 5.8% on a 24 core desktop.
+        assert_eq!(format_cpu(140.), "140%");
+        // Saturating every core of a big machine still has somewhere to go.
+        assert_eq!(format_cpu(2400.), "2400%");
+        // Small readings keep the tenth that distinguishes them.
+        assert_eq!(format_cpu(0.4), "0.4%");
+        assert_eq!(format_cpu(9.9), "9.9%");
+        assert_eq!(format_cpu(12.4), "12%");
     }
 }

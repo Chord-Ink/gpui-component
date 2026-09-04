@@ -4,7 +4,7 @@ use gpui::{AnyElement, Context, HighlightStyle, Hsla, SharedString, Window};
 use ropey::Rope;
 
 use super::{EditorState, FoldRange, InputEdit};
-use crate::CaretStyle;
+use crate::{CaretStyle, SemanticThemeTokens};
 
 /// Resolves semantic highlight names into renderable GPUI styles.
 ///
@@ -128,6 +128,44 @@ pub struct InputEditorStyle {
     editor_active_line: Option<Hsla>,
     editor_gutter_background: Option<Hsla>,
     fold_icon_renderer: Option<FoldIconRenderer>,
+}
+
+impl InputEditorStyle {
+    /// Fills in every colour that was left unset, from the active palette.
+    ///
+    /// `Hsla::default()` is fully transparent, and every colour on `Default` is
+    /// that — so an input nothing projected onto painted its glyphs, its caret
+    /// and its selection in nothing at all. Transparent is not a colour anyone
+    /// means for ink, which is what makes it usable as "unset" here.
+    ///
+    /// This is resolution, not assignment: whatever a consumer did project is
+    /// kept exactly. `crates/component` projects the whole style on every render and
+    /// never reaches this; a consumer that projects once at construction gets
+    /// the palette that is current now rather than the one that happened to be
+    /// installed when the state was built.
+    pub fn resolved(&self, tokens: &SemanticThemeTokens) -> Self {
+        let colors = &tokens.colors;
+        let unset = |value: Hsla| value.a == 0.;
+        let or = |value: Hsla, fallback: Hsla| if unset(value) { fallback } else { value };
+
+        let foreground = or(self.foreground, colors.foreground);
+        let mut selection = self.selection;
+        if unset(selection) {
+            selection = colors.accent;
+            // A selection must not hide the glyphs it selects.
+            selection.a = 0.4;
+        }
+
+        Self {
+            foreground,
+            muted_foreground: or(self.muted_foreground, colors.muted_foreground),
+            background: or(self.background, colors.surface),
+            border: or(self.border, colors.border),
+            selection,
+            caret: self.caret.with_color(or(self.caret.color(), foreground)),
+            ..self.clone()
+        }
+    }
 }
 
 impl Default for InputEditorStyle {
@@ -300,5 +338,81 @@ impl InputEditorStyle {
 
     pub fn fold_icon_renderer(&self) -> Option<&FoldIconRenderer> {
         self.fold_icon_renderer.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::hsla;
+
+    use super::InputEditorStyle;
+    use crate::{CaretStyle, SemanticThemeTokens};
+
+    fn dark() -> SemanticThemeTokens {
+        let mut tokens = SemanticThemeTokens::default();
+        tokens.colors.foreground = hsla(0., 0., 0.98, 1.0);
+        tokens.colors.muted_foreground = hsla(0., 0., 0.64, 1.0);
+        tokens.colors.surface = hsla(0., 0., 0.04, 1.0);
+        tokens.colors.border = hsla(0., 0., 0.15, 1.0);
+        tokens.colors.accent = hsla(0.6, 0.5, 0.5, 1.0);
+        tokens
+    }
+
+    #[test]
+    fn an_unprojected_style_takes_its_ink_from_the_palette() {
+        let tokens = dark();
+        let resolved = InputEditorStyle::new().resolved(&tokens);
+
+        assert_eq!(resolved.foreground(), tokens.colors.foreground);
+        assert_eq!(resolved.caret().color(), tokens.colors.foreground);
+        assert_eq!(resolved.muted_foreground(), tokens.colors.muted_foreground);
+        assert_eq!(resolved.background(), tokens.colors.surface);
+        assert_eq!(resolved.border(), tokens.colors.border);
+        // The point of the change: every one of these was transparent, so an
+        // input nothing projected onto painted its text in nothing at all.
+        for colour in [
+            resolved.foreground(),
+            resolved.caret().color(),
+            resolved.muted_foreground(),
+            resolved.selection(),
+        ] {
+            assert!(colour.a > 0., "{colour:?} is still invisible");
+        }
+    }
+
+    #[test]
+    fn a_selection_stays_translucent_enough_to_read_through() {
+        let resolved = InputEditorStyle::new().resolved(&dark());
+        assert_eq!(resolved.selection().a, 0.4);
+    }
+
+    #[test]
+    fn projected_colours_are_kept_verbatim() {
+        let chosen = hsla(0.3, 0.4, 0.5, 1.0);
+        let resolved = InputEditorStyle::new()
+            .with_foreground(chosen)
+            .with_caret(CaretStyle::new().with_color(chosen))
+            .resolved(&dark());
+
+        assert_eq!(resolved.foreground(), chosen);
+        assert_eq!(resolved.caret().color(), chosen);
+        // And what was not projected still comes from the palette.
+        assert_eq!(resolved.border(), dark().colors.border);
+    }
+
+    #[test]
+    fn resolution_never_consumes_its_own_output() {
+        // The projected style is kept verbatim precisely so that this holds:
+        // resolving against a second palette must follow it, not stay on the
+        // first. Resolving in place would have frozen after one pass.
+        let projected = InputEditorStyle::new();
+        let first = projected.resolved(&dark());
+
+        let mut light = SemanticThemeTokens::default();
+        light.colors.foreground = hsla(0., 0., 0.04, 1.0);
+        let second = projected.resolved(&light);
+
+        assert_ne!(first.foreground(), second.foreground());
+        assert_eq!(second.foreground(), light.colors.foreground);
     }
 }

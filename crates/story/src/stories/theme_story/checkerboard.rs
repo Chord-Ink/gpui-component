@@ -1,5 +1,5 @@
-use gpui::*;
-use gpui_component::ActiveTheme as _;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::*;
 
 #[derive(IntoElement)]
 pub struct Checkerboard {
@@ -40,7 +40,7 @@ impl RenderOnce for Checkerboard {
             .overflow_hidden()
             .size_full()
             .child(
-                gpui::canvas(
+                gpui_kit::canvas(
                     move |_, _, _| (),
                     move |bounds, _, window, _| {
                         let size = square_size;
@@ -51,18 +51,18 @@ impl RenderOnce for Checkerboard {
                             for col in 0..cols {
                                 if (row + col) % 2 == 0 {
                                     let origin = bounds.origin
-                                        + gpui::point(size * (col as f32), size * (row as f32));
+                                        + gpui_kit::point(size * (col as f32), size * (row as f32));
 
-                                    window.paint_quad(gpui::quad(
-                                        gpui::Bounds {
+                                    window.paint_quad(gpui_kit::quad(
+                                        gpui_kit::Bounds {
                                             origin,
-                                            size: gpui::size(size, size),
+                                            size: gpui_kit::size(size, size),
                                         },
-                                        gpui::Corners::default(),
+                                        gpui_kit::Corners::default(),
                                         c2,
-                                        gpui::Edges::default(),
-                                        gpui::transparent_black(),
-                                        gpui::BorderStyle::default(),
+                                        gpui_kit::Edges::default(),
+                                        gpui_kit::transparent_black(),
+                                        gpui_kit::BorderStyle::default(),
                                     ));
                                 }
                             }

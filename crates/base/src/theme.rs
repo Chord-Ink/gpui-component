@@ -1,10 +1,21 @@
 use gpui::{App, Global};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::{CaretMotion, ScrollbarMode, ScrollbarMotion, ScrollbarStyles, SemanticThemeTokens};
 
 /// Application-wide defaults for Base behavior modules.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeAppearance {
+    #[default]
+    Light,
+    Dark,
+}
+
 #[derive(Clone, Default)]
 pub struct Theme {
+    appearance: ThemeAppearance,
     tokens: SemanticThemeTokens,
     scrollbar: ScrollbarTheme,
     resizable: ResizableTheme,
@@ -16,6 +27,11 @@ impl Global for Theme {}
 impl Theme {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_appearance(mut self, appearance: ThemeAppearance) -> Self {
+        self.appearance = appearance;
+        self
     }
 
     /// The semantic colors, spacing, radii and type Base reads when it paints.
@@ -39,6 +55,10 @@ impl Theme {
     pub fn with_caret_motion(mut self, caret_motion: CaretMotion) -> Self {
         self.caret_motion = caret_motion;
         self
+    }
+
+    pub fn appearance(&self) -> ThemeAppearance {
+        self.appearance
     }
 
     pub fn tokens(&self) -> &SemanticThemeTokens {
@@ -142,12 +162,21 @@ impl ScrollbarTheme {
 
 /// Global visual defaults used by resizable panel handles.
 ///
-/// The Base default is transparent. Applications and styled façades may
-/// project their own colors without coupling resize behavior to a theme crate.
+/// `None` means *unset*, not invisible: a handle with nothing projected onto it
+/// resolves from the active [`SemanticThemeTokens`] -- `border` at rest, `ring`
+/// while dragging -- which are the tokens those two states already mean
+/// everywhere else.
+///
+/// These were plain colors, so the Base default was `Hsla::default()`: fully
+/// transparent. That reads as a deliberate choice next to a styled façade,
+/// which projects its own values and never sees it, and as a missing divider
+/// to anything that does not -- and a consumer with no façade has no way to
+/// project anything. Making them optional keeps the projection exactly as it
+/// was while giving the unprojected case an answer.
 #[derive(Clone, Copy, Default)]
 pub struct ResizableTheme {
-    handle: gpui::Hsla,
-    active_handle: gpui::Hsla,
+    handle: Option<gpui::Hsla>,
+    active_handle: Option<gpui::Hsla>,
 }
 
 impl ResizableTheme {
@@ -156,21 +185,21 @@ impl ResizableTheme {
     }
 
     pub fn with_handle(mut self, handle: gpui::Hsla) -> Self {
-        self.handle = handle;
+        self.handle = Some(handle);
         self
     }
 
     /// The handle under the pointer that is dragging it.
     pub fn with_active_handle(mut self, active_handle: gpui::Hsla) -> Self {
-        self.active_handle = active_handle;
+        self.active_handle = Some(active_handle);
         self
     }
 
-    pub fn handle(&self) -> gpui::Hsla {
+    pub fn handle(&self) -> Option<gpui::Hsla> {
         self.handle
     }
 
-    pub fn active_handle(&self) -> gpui::Hsla {
+    pub fn active_handle(&self) -> Option<gpui::Hsla> {
         self.active_handle
     }
 }
