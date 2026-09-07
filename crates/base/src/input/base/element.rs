@@ -336,7 +336,7 @@ use super::MASK_CHAR;
 /// The masked string consists of `MASK_CHAR` repeated once per character in the original text.
 /// Since `MASK_CHAR` may be multi-byte in UTF-8, the byte offset in the masked string is
 /// `char_index * MASK_CHAR.len_utf8()`.
-fn masked_display_offset(text: &Rope, original_offset: usize) -> usize {
+pub(super) fn masked_display_offset(text: &Rope, original_offset: usize) -> usize {
     text.offset_to_char_index(original_offset) * MASK_CHAR.len_utf8()
 }
 
@@ -2479,18 +2479,31 @@ impl<M: InputModeKind> Element for TextElement<M> {
             cx,
         );
 
-        self.state.update(cx, |state, cx| {
+        // The platform IME caches character coordinates against the active input
+        // context, which belongs to the active window, so an inactive window must
+        // not invalidate them.
+        let ime_caret = prepaint
+            .cursor_bounds
+            .filter(|_| focused && window_active)
+            .map(|bounds| (bounds, prepaint.cursor_scroll_offset));
+        let ime_caret_moved = self.state.update(cx, |state, cx| {
             state.last_layout = Some(prepaint.last_layout.clone());
             state.last_bounds = Some(bounds);
-            state.last_cursor = Some(state.cursor());
             state.set_input_bounds(input_bounds, cx);
             state.last_selected_range = Some(selected_range);
             state.scroll_size = prepaint.scroll_size;
             state.update_scroll_offset(Some(prepaint.cursor_scroll_offset), cx);
             state.deferred_scroll_offset = None;
 
+            let moved = ime_caret.is_some() && state.ime_caret != ime_caret;
+            state.ime_caret = ime_caret;
+
             cx.notify();
+            moved
         });
+        if ime_caret_moved {
+            window.invalidate_character_coordinates();
+        }
 
         if let Some(hitbox) = prepaint.hover_definition_hitbox.as_ref() {
             window.set_cursor_style(gpui::CursorStyle::PointingHand, &hitbox);

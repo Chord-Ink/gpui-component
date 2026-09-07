@@ -24,7 +24,7 @@ use super::{
     InputHighlighterFactory, MASK_CHAR, MaskPattern, NativeMenu, NumberStep, WrappingIndent,
     blink_cursor::BlinkCursor,
     change::Change,
-    element::{EditorScrollbar, EditorScrollbarSnapshot, TextElement},
+    element::{EditorScrollbar, EditorScrollbarSnapshot, TextElement, masked_display_offset},
     kind::InputModeKind,
     mask_pattern::normalize_number_input,
     mode::LayoutMode,
@@ -306,7 +306,10 @@ pub struct InputBaseState<M: InputModeKind> {
     /// The marked range is the temporary insert text on IME typing.
     pub(super) ime_marked_range: Option<Selection>,
     pub(super) last_layout: Option<LastLayout>,
-    pub(super) last_cursor: Option<usize>,
+    /// Caret rect and scroll offset last handed to the platform IME. A caret
+    /// pinned at the edge of an overflowing field keeps its rect while the text
+    /// scrolls under it, so the offset belongs in the key.
+    pub(super) ime_caret: Option<(Bounds<Pixels>, Point<Pixels>)>,
     /// The input container bounds
     pub(super) input_bounds: Bounds<Pixels>,
     /// The text bounds
@@ -647,7 +650,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             last_layout: None,
             last_bounds: None,
             last_selected_range: None,
-            last_cursor: None,
+            ime_caret: None,
             scroll_handle: ScrollHandle::new(),
             scroll_size: gpui::size(px(0.), px(0.)),
             editor_scrollbar_snapshot: Cell::new(None),
@@ -2364,6 +2367,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     }
 
     fn on_focus(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.ime_caret = None;
         self.blink_cursor.update(cx, |cursor, cx| {
             cursor.start(cx);
         });
@@ -2682,6 +2686,24 @@ impl<M: InputModeKind> InputBaseState<M> {
             &self.text,
         );
     }
+
+    /// Move a text byte range into the shaped-line coordinate space, which is
+    /// the mask characters when masked.
+    fn display_range(&self, range: Range<usize>) -> Range<usize> {
+        if !self.masked {
+            return range;
+        }
+        masked_display_offset(&self.text, range.start)..masked_display_offset(&self.text, range.end)
+    }
+
+    /// Inverse of [`Self::display_range`] for a single offset.
+    fn text_offset(&self, display_offset: usize) -> usize {
+        if !self.masked {
+            return display_offset;
+        }
+        self.text
+            .char_index_to_offset(display_offset / MASK_CHAR.len_utf8())
+    }
 }
 
 impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
@@ -2986,7 +3008,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         let last_layout = self.last_layout.as_ref()?;
         let line_height = last_layout.line_height;
         let line_number_width = last_layout.line_number_width;
-        let range = self.range_from_utf16(&range_utf16);
+        let range = self.display_range(self.range_from_utf16(&range_utf16));
 
         let mut start_origin = None;
         let mut end_origin = None;
@@ -3047,7 +3069,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         for (vi, line) in last_layout.lines.iter().enumerate() {
             let offset = last_layout.visible_line_byte_offsets[vi];
             if let Some(utf8_index) = line.index_for_position(line_point, last_layout) {
-                return Some(self.offset_to_utf16(offset + utf8_index));
+                return Some(self.offset_to_utf16(self.text_offset(offset + utf8_index)));
             }
         }
 
